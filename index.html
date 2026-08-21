@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="theme-color" content="#f7f9f5" />
+  <meta name="description" content="국립순천대학교 학생을 위한 상황 기반 행정·캠퍼스 업무 네비게이터, 어디가?" />
+  <meta property="og:title" content="어디가? | 순천대 캠퍼스 업무 네비게이터" />
+  <meta property="og:description" content="업무명이나 관련 키워드를 입력하면 국립순천대학교 공식정보에서 가장 가까운 안내를 보여주는 캠퍼스 업무 네비게이터" />
+  <meta property="og:type" content="website" />
+  <meta property="og:image" content="/og-image.png" />
+  <meta property="og:image:width" content="1200" />
+  <meta property="og:image:height" content="630" />
+  <meta name="twitter:card" content="summary_large_image" />
+  <meta name="twitter:title" content="어디가? | 순천대 캠퍼스 업무 네비게이터" />
+  <meta name="twitter:description" content="관련 키워드를 입력하면 순천대 공식정보에서 가장 가까운 업무 안내를 보여주는 서비스" />
+  <meta name="twitter:image" content="/og-image.png" />
+  <title>어디가? | 순천대 캠퍼스 업무 네비게이터</title>
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="ambient ambient-one"></div>
+  <div class="ambient ambient-two"></div>
+<main>
+    <section class="hero">
+      <div class="brand-eyebrow" aria-label="어디가?">
+        <span class="wherego-mark" aria-hidden="true">
+          <svg viewBox="0 0 56 56" role="img">
+            <circle class="logo-disc" cx="28" cy="28" r="24"/>
+            <path class="logo-route" d="M17 34c0-7.7 5.3-13 12.5-13H37"/>
+            <path class="logo-arrow" d="M32.5 16.5 38 21l-5.5 4.5"/>
+            <circle class="logo-start" cx="17" cy="34" r="3.2"/>
+          </svg>
+        </span>
+        <span class="wherego-word">어디가?</span>
+      </div>
+      <h1>궁금한 학교 업무,<br><span>아는 단어부터 검색해보세요.</span></h1>
+      <p class="hero-copy">
+        <span>업무명, 부서명, 관련 키워드를 입력하면 국립순천대학교 공식정보에서 가장 가까운 안내를 보여드려요.</span>
+        <span>키워드를 구체적으로 입력할수록 더 정확하게 찾을 수 있습니다.</span>
+      </p>
+
+      <div class="search-shell" id="searchShell">
+        <div class="search-row">
+          <span class="search-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <circle cx="10.8" cy="10.8" r="6.2"></circle>
+              <path d="M15.5 15.5 20 20"></path>
+            </svg>
+          </span>
+          <input id="searchInput" autocomplete="off" maxlength="300" placeholder="예: 휴학하고 싶어요, 국가장학금이 궁금해요, 수강신청이 궁금해요" aria-label="학교 업무 키워드 검색" />
+          <button id="searchBtn" class="primary-btn" type="button">어디가?</button>
+        </div>
+      </div>
+      <div class="search-hint important-hint">
+        <span class="notice-tag">TIP</span>
+        <span class="hint-message"><strong>업무명이나 핵심 키워드를 함께 입력하면 더 정확해요.</strong></span>
+      </div>
+
+      <div class="examples" aria-label="예시 검색어">
+        <button class="example-chip">휴학하고 싶어요</button>
+        <button class="example-chip">국가장학금이 궁금해요</button>
+        <button class="example-chip">수강신청이 궁금해요</button>
+        <button class="example-chip">학생증을 잃어버렸어요</button>
+      </div>
+      <div id="recentSearches" class="recent-searches hidden" aria-label="최근 검색"></div>
+    </section>
+
+    <section class="quick-section" id="quickSection">
+      <button class="quick-heading quick-toggle" id="quickToggle" type="button"
+        aria-expanded="true" aria-controls="categoryStrip">
+        <span>빠르게 둘러보기</span>
+        <small>카테고리로도 찾을 수 있어요</small>
+        <i class="quick-chevron" aria-hidden="true"></i>
+      </button>
+      <div class="category-strip" id="categoryStrip" aria-label="업무 카테고리"></div>
+    </section>
+
+    <section id="searchState" class="content-section hidden" aria-live="polite">
+      <div class="section-heading">
+        <div>
+          
+          <div class="result-title-row">
+            <h2 id="resultHeading">이 업무를 찾으셨나요?</h2>
+            <button id="resetSearchBtn" class="reset-search-btn" type="button">↺ 다시 검색</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="accuracy-notice important-notice">
+        <div class="notice-title"><span class="notice-symbol">!</span><strong>안내를 이용하기 전에 확인해주세요.</strong></div>
+        <p class="notice-copy">
+          <span>이 서비스는 국립순천대학교 공개정보를 바탕으로 가장 가까운 업무를 정리해 보여주는 참고 도구입니다.</span>
+          <span><strong>실제 신청·제출 전에는 공식 원문을 확인해주세요.</strong></span>
+          <span><strong>서류·일정이 중요한 경우 담당부서에 전화로 최종 확인하는 것을 권장합니다.</strong></span>
+        </p>
+      </div>
+
+      <div id="clarificationBox" class="clarification hidden"></div>
+      <div id="resultSummary"></div>
+      <div id="resultGrid" class="result-layout"></div>
+    </section>
+
+    <section id="browseState" class="content-section">
+      <div class="section-heading">
+        <div>
+          
+          <h2>무엇을 찾고 있나요?</h2>
+          <p>카테고리로 둘러보거나 위 검색창에 관련 키워드를 입력해보세요.</p>
+        </div>
+      </div>
+      <div id="popularGrid" class="popular-grid"></div>
+    </section>
+  </main>
+
+  <footer class="footer-center">
+    <p class="footer-notice">
+      <span class="footer-notice-label">안내</span>
+      <span>본 서비스는 국립순천대학교 공식 웹페이지의 공개 정보를 바탕으로 안내합니다.
+      <strong>일정·금액·모집조건처럼 변동 가능한 정보는 반드시 원문 공지를 확인하세요.</strong></span>
+    </p>
+  </footer>
+
+  <template id="serviceCardTemplate">
+    <article class="service-card">
+      <div class="card-top">
+        <div>
+          <span class="category-pill"></span>
+          <h3 class="service-title"></h3>
+          <p class="service-description"></p>
+        </div>
+        
+      </div>
+
+      <div class="time-warning hidden">
+        <span>◷</span>
+        <div>
+          <b>기간·조건이 바뀔 수 있어요.</b>
+          <p>최신 순천대학교 공지를 함께 확인해주세요.</p>
+        </div>
+      </div>
+
+      <div class="action-block">
+        <h4><span>01</span> 지금 해야 할 일</h4>
+        <ol class="steps-list"></ol>
+      </div>
+
+      <div class="info-grid">
+        <div class="info-box department-box">
+          <span class="info-label">담당</span>
+          <b class="department-name">공식 페이지 확인</b>
+          <small class="department-location"></small>
+        </div>
+        <div class="info-box method-box">
+          <span class="info-label">처리 방법</span>
+          <b class="method-primary">안내 확인</b>
+          <small class="method-detail"></small>
+        </div>
+      </div>
+
+      <div class="documents-section hidden">
+        <h4><span>02</span> 준비할 것</h4>
+        <div class="document-chips"></div>
+      </div>
+
+      <div class="location-callout hidden"><div><span class="info-label">어디로 가나요?</span><b class="location-text"></b></div><a class="map-link" href="https://www.scnu.ac.kr/SCNU/cm/cntnts/cntntsView.do?cntntsId=1046&mi=1182" target="_blank" rel="noopener">⌖ 캠퍼스맵에서 위치 확인</a></div><div class="card-actions"></div>
+
+      <details class="source-details">
+        <summary>공식 출처 확인</summary>
+        <div class="source-list"></div>
+      </details>
+    </article>
+  </template>
+
+  <script src="./app.js"></script>
+</body>
+</html>
