@@ -632,12 +632,14 @@ function contrastTail(q){
 const DOMAIN_ANCHOR={
  dorm:'기숙사',student:'학생',academic:'학사',finance:'등록금',admission:'입학',facilities:'시설',it:'학교 전산',international:'국제',career:'취업',research:'연구',research_ethics:'연구윤리',counseling:'상담',startup:'창업',development:'발전기금',library:'도서관',admin:'학교 행정',graduate_school:'대학원',education_innovation:'교육혁신'
 };
+const EXPLICIT_CAMPUS_CONCEPT_WORDS=['기숙사','생활관','학생증','신분증','장학','등록금','학비','휴학','복학','자퇴','재입학','전과','수강','성적','학점','졸업','입학','수시','정시','편입','시설','강의실','연구실','와이파이','향림통','lms','교환학생','유학생','취업','진로','연구','irb','창업','발전기금','도서관','대학원','rotc','학군단','학생군사교육단','증명서','재학증명','성적증명','졸업증명','인권','성희롱','성폭력','상담센터','보건진료실','메이커스페이스'];
+function hasExplicitCampusConceptWord(part){
+ const n=normalizeQuery(part);if(!n)return false;
+ return EXPLICIT_CAMPUS_CONCEPT_WORDS.some(x=>n.includes(normalizeQuery(x)));
+}
 function partHasExplicitConcept(part){
  if(detectConcept(part))return true;
- const n=normalizeQuery(part);
- if(!n)return false;
- const domainWords=['기숙사','생활관','학생증','신분증','장학','등록금','학비','휴학','복학','자퇴','재입학','전과','수강','성적','학점','졸업','입학','수시','정시','편입','시설','강의실','연구실','와이파이','향림통','lms','교환학생','유학생','취업','진로','연구','irb','창업','발전기금','도서관','대학원','rotc','학군단','학생군사교육단','증명서','재학증명','성적증명','졸업증명','인권','성희롱','성폭력','상담센터','보건진료실','메이커스페이스'];
- return domainWords.some(x=>n.includes(normalizeQuery(x)));
+ return hasExplicitCampusConceptWord(part);
 }
 
 function splitMultiIntent(q){
@@ -679,7 +681,7 @@ function splitMultiIntent(q){
 
  marked=marked.replace(/\s*첨삭하고\s+/g,' 첨삭|||');
  marked=marked.replace(/(발전기금|발전지원금)\s*내고\s+/g,'$1 내고|||');
- marked=marked.replace(/\s*(확인|변경|재발급|발급|신청|예약|납부|결제|취소|조회|정정|등록|제출|신고|문의)(?:도)?하고(?!\s*싶(?:어|어요|다|습니다|고))\s+/g,' $1|||');
+ marked=marked.replace(/\s*(확인|변경|재발급|발급|신청|예약|납부|결제|취소|조회|정정|등록|제출|신고|문의)(?:\s*도)?\s*하고(?!\s*싶(?:어|어요|다|습니다|고))\s+/g,' $1|||');
  marked=marked.replace(new RegExp('('+nextConcept+')(?:도)?하고\\s+(?='+nextConcept+')','gi'),'$1|||');
  marked=marked.replace(/([가-힣A-Za-z0-9]+(?:했(?:었)?고|했고|됐고|있고|없고|렸고|냈고|났고|안되고|되고|싶고|궁금하고|필요하고))\s+/g,'$1|||');
  marked=marked.replace(/\s+(?:받고|받았고)(?!\s*싶(?:어|어요|다|습니다|고))\s+/g,'|||');
@@ -1340,8 +1342,35 @@ function dedupeRouteIntentItems(route){
   if(total!=null&&!Number.isNaN(Number(total))){next.total_intents=Number(total);next.truncated_count=Math.max(0,Number(total)-out.length);}
   return next;
 }
+function isWrappedCanonicalTitleQuery(query){
+ const n=normalizeQuery(query);if(!n)return false;
+ const cores=new Set([n]);
+ const suffixes=['관련해서궁금해요','좀알려주세요','문의'];
+ for(let pass=0;pass<2;pass++){
+   for(const c of [...cores]){
+     if(c.startsWith('순천대에서')&&c.length>'순천대에서'.length)cores.add(c.slice('순천대에서'.length));
+     for(const suf of suffixes)if(c.endsWith(suf)&&c.length>suf.length)cores.add(c.slice(0,-suf.length));
+   }
+ }
+ for(const c of [...cores])for(const pref of ['국립순천대학교','순천대학교','순천대'])if(c.startsWith(pref)&&c.length>pref.length)cores.add(c.slice(pref.length));
+ if(n.startsWith('학교')&&n.endsWith('문의')&&n.length>'학교문의'.length)cores.add(n.slice('학교'.length,-'문의'.length));
+ return services.some(s=>cores.has(normalizeQuery(s.title||'')));
+}
 function searchCampusServices(query,metaGuard=false){
-  return dedupeRouteIntentItems(searchCampusServicesRaw(query,metaGuard));
+  // A punctuation/conjunction fragment can be only a follow-up facet of the preceding task,
+  // not another administrative intent: "휴학하고 싶어. 어디로 가면 될까".
+  // Remove those dependent tails before the deterministic whole-query scorer sees them.
+  // This prevents generic routing words such as 연락처/서류/방법 from manufacturing a second service.
+  let effectiveQuery=String(query||'');
+  if(!metaGuard&&!isWrappedCanonicalTitleQuery(effectiveQuery)){
+    const clauses=splitExplicitClauses(effectiveQuery);
+    if(clauses.length>=2){
+      const filler=new Set(['싶어','싶어요','싶음','하고싶어','하고싶어요','하고싶음','할래','할래요','해줘','해주세요','알려줘','알려주세요','문의드려요','문의드립니다']);
+      const independent=clauses.filter(clause=>!filler.has(normalizeQuery(clause))&&!isDependentFollowupClause(clause));
+      if(independent.length>=1&&independent.length<clauses.length)effectiveQuery=independent.join(' 그리고 ');
+    }
+  }
+  return dedupeRouteIntentItems(searchCampusServicesRaw(effectiveQuery,metaGuard));
 }
 
 
@@ -1432,7 +1461,7 @@ async function classifyUncertainQuery(query, context={}){
   if(pendingClassifierController) pendingClassifierController.abort();
   const controller=new AbortController();
   pendingClassifierController=controller;
-const timer=setTimeout(()=>controller.abort(),24000);
+  const timer=setTimeout(()=>controller.abort(),28000);
   try{
     const res = await fetch('/api/classify', {
       method:'POST',
@@ -1545,7 +1574,107 @@ function stableKeyPart(text=''){let h=2166136261;for(const ch of String(text)){h
 function queryFacet(query=''){const q=String(query);return {phone:/전화|연락처/.test(q),location:/어디|위치|찾아가/.test(q),documents:/준비물|서류|뭐.{0,3}(필요|가져|내)/.test(q),period:/기간|언제|마감|신청일|몇\s*월|몇\s*일까지/.test(q),amount:/금액|얼마|수수료|비용|수강료|환불/.test(q),eligibility:/자격|조건|대상|가능(?:해|한|한가|한지|여부)/.test(q),schedule:/몇\s*시|시간|식사시간|아침|점심|저녁/.test(q),operations:/온수|냉방|난방|냉·난방|냉난방/.test(q)};}
 function splitExplicitClauses(query=''){return splitMultiIntent(query).map(x=>x.trim()).filter(x=>x.length>=2);}
 function meaningfulUnknown(route,clause){return route?.status==='unknown' && ['unsupported_item','ambiguous_location','ambiguous_term','unresolved_relation','not_found','no_signal'].includes(route.reason);}
-function findUnresolvedClauses(query){const clauses=splitExplicitClauses(query);if(clauses.length<2)return [];const filler=new Set(['싶어','싶어요','싶음','하고싶어','하고싶어요','하고싶음','할래','할래요','해줘','해주세요','알려줘','알려주세요','문의드려요','문의드립니다']);const out=[];for(const clause of clauses){if(filler.has(normalizeQuery(clause)))continue;const r=searchCampusServices(clause,true);if(meaningfulUnknown(r,clause))out.push(clause);}return [...new Set(out)].slice(0,5);}
+// A sentence fragment is NOT a new administrative intent merely because punctuation or a
+// conjunction split it from the previous sentence.  Missing-only Gemini assistance now uses a
+// positive rule: a fragment must contain evidence of its OWN campus object/topic before it is
+// eligible to become an unresolved task.  This prevents an open-ended list of Korean tail-question
+// exceptions ("어디로 가?", "거기 몇 시까지 해?", "그거 뭐 챙겨?", etc.).
+//
+// Examples:
+//   휴학하고 싶어. 어디로 가면 될까        -> second clause has no own object -> dependent
+//   휴학하고 싶어. 그쪽 몇 시까지 해?     -> anaphoric/facet only -> dependent
+//   휴학하고 싶어. 학교 카드 다시 받고 싶어 -> "카드" is a new object -> independent
+//   휴학하고 싶어. 모임 가입도 하고 싶어    -> "모임" is a new object -> independent
+function clauseCoreTokens(clause){
+ const raw=String(clause||'').normalize('NFKC').toLowerCase();
+ const parts=raw.replace(/[^0-9a-z가-힣]+/g,' ').split(/\s+/).filter(Boolean);
+ const stripParticle=(token)=>{
+   let t=normalizeQuery(token);
+   if(!t)return '';
+   // Remove only grammatical particles/endings. Do not stem arbitrary Korean nouns.
+   const endings=['으로부터','에서부터','에게서','한테서','으로는','에서는','에게는','한테는','까지는','부터는','이라도','라도','이랑','랑','과','와','에게','한테','에서','으로','로는','에는','부터','까지','보다','처럼','만큼','조차','마저','밖에','도','만','은','는','이','가','을','를','에','로','의'];
+   let changed=true;
+   while(changed&&t.length>1){
+     changed=false;
+     for(const e of endings){
+       if(t.endsWith(e)&&t.length-e.length>=1){t=t.slice(0,-e.length);changed=true;break;}
+     }
+   }
+   return t;
+ };
+ return parts.map(stripParticle).filter(Boolean);
+}
+function hasIndependentTaskEvidence(clause){
+ const raw=String(clause||'').trim();
+ const n=normalizeQuery(raw);if(!n)return false;
+ // Strong campus nouns (휴학/수강/기숙사/학생증...) are positive evidence even when Korean
+ // particles or verb endings are attached. Unlike the broader semantic detector, this list does not
+ // contain generic channel/facet words such as 홈페이지/시간/서류.
+ if(hasExplicitCampusConceptWord(raw))return true;
+ // We first extract the fragment's own lexical nucleus. A broad catalog/concept detector by itself
+ // is not enough because channel/time words can appear in catalog metadata.
+
+ const ignoredExact=new Set([
+   // discourse / anaphora / pronouns
+   '그리고','그럼','그러면','근데','그런데','그래서','그렇다면','또','또한','게다가','대신',
+   '그거','그것','그건','그게','그걸','그곳','거기','거긴','거길','그쪽','그쪽','그부서','해당','해당부서',
+   '이거','이것','이건','이게','이걸','이곳','여기','여긴','이쪽','저거','저것','저기','저쪽',
+   '나','내','내가','저','제가','우리','본인','본인이','자기','자기가','거','것','건','게','곳','쪽',
+   // question/facet vocabulary: attributes of a task, not a task object by themselves
+   '어디','어느','어떻게','언제','누구','몇','얼마','뭐','무엇','무슨','어떤','왜','어디로','어디에','어디서',
+   '담당','담당부서','담당자','부서','위치','연락처','전화번호','전화','연락','문의','방법','절차',
+   '기간','마감','신청기간','신청일','준비물','필요서류','서류','증빙','증빙서류','양식','신청서','비용','수수료','금액','시간','운영시간','몇시','오전','오후','점심시간','평일','주말','토요일','일요일','오늘','내일',
+   '온라인','오프라인','홈페이지','사이트','웹','방문','직접','먼저','나중','다시','관련','대해서','대해',
+   // generic grammar/predicates that can attach to any prior task
+   '좀','제발','혹시','그냥','자세히','구체적','구체적으로','알려','알려줘','알려주세요','궁금','궁금해','궁금해요','확인','확인해줘','맞아','맞나요','맞는지',
+   '필요','필요해','필요한','가능','가능해','가능한','싶어','싶어요','싶음','할래','할래요',
+   '하면','하면돼','하면될까','하면되','해야','해야해','해야돼','가면','가면돼','가면될까','가야','가야해','가야돼',
+   '되는지','되나요','될까요','될까','돼','돼요','되어','되','해','해요','하나','하는','하려면','하려고',
+   '있어','있나요','있는지','없어','없나요','열려','열려있어','열려있나요','챙겨','챙겨야','가져','가져가',
+   // campus-context words alone do not identify a new service
+   '학교','순천대','순천대학교','교내','학교안','학교내'
+ ]);
+ const ignoredStarts=[
+   '알려','궁금','확인','필요','가능','문의','연락','전화','어떻게','어디','언제','누구','얼마','몇','뭐','뭔','무엇','왜',
+   '하면','해야','가면','가야','되','돼','하나','하려','하는','챙기','챙겨','가져','열','운영','물어','말해','처리','쓰','써',
+   '싶','있','없','먼저','나중','다시'
+ ];
+ const actionOnlyStarts=[
+   // An action without its own object is normally a continuation of the preceding task.
+   '신청','발급','재발급','등록','제출','예약','취소','조회','정정','변경','납부','결제','신고','방문','확인','문의'
+ ];
+ const tokens=clauseCoreTokens(raw);
+ // Attribute questions about a previously mentioned task are dependent unless the fragment also
+ // contains a strong action directed at its own object. This is category-based (location/contact/
+ // documents/period/cost/eligibility/time), not a list of full Korean sentences.
+ const facet=queryFacet(raw);
+ const asksFacet=Object.values(facet).some(Boolean)||/(?:필요|챙겨|가져|준비|제출).{0,6}(?:해|돼|되|있|없|뭐|무엇|사진|서류|증빙|양식)/.test(n);
+ const strongOwnAction=/(?:재발급|잃어버|분실|고장|가입|탈퇴|개설|대여|빌리|환불|정정|변경|바꾸|신고|예약|취소|다시.{0,5}(?:받|만들)|(?:받|만들|신청|발급|등록|납부|제출).{0,5}(?:싶|하려|해야|할래|받아|해줘))/.test(n);
+ const content=[];
+ for(let token of tokens){
+   // "학교카드" is a colloquial object; remove only the generic school-context prefix.
+   token=token.replace(/^(?:순천대학교|순천대|학교)/,'');
+   if(!token||token.length<2)continue;
+   if(ignoredExact.has(token))continue;
+   if(ignoredStarts.some(x=>token.startsWith(x)))continue;
+   if(actionOnlyStarts.some(x=>token.startsWith(x)))continue;
+   // Common Korean connective/verb tails are not nouns. Keep lexical nouns such as 카드/모임/통장/버스.
+   if(/(?:하고|하고싶어|하고싶어요|하려고|하려면|하는데|했는데|하면|해서|해도|받고|받아|받으|만들고|만들어|바꾸고|바꿔|잃어버|고장나|고장났|궁금하|필요하)$/.test(token))continue;
+   content.push(token);
+ }
+ return content.length>0&&(!asksFacet||strongOwnAction);
+}
+function isDependentFollowupClause(clause){return !hasIndependentTaskEvidence(clause);}
+function findUnresolvedClauses(query){
+ const clauses=splitExplicitClauses(query);if(clauses.length<2)return [];
+ const filler=new Set(['싶어','싶어요','싶음','하고싶어','하고싶어요','하고싶음','할래','할래요','해줘','해주세요','알려줘','알려주세요','문의드려요','문의드립니다']);
+ const out=[];
+ for(const clause of clauses){
+   if(filler.has(normalizeQuery(clause))||isDependentFollowupClause(clause))continue;
+   const r=searchCampusServices(clause,true);if(meaningfulUnknown(r,clause))out.push(clause);
+ }
+ return [...new Set(out)].slice(0,5);
+}
 
 
 function renderMultiSummary(items, query){
