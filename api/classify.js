@@ -193,9 +193,10 @@ if(!response.ok){
   );
 
   return res.status(200).json({
-    mode:'unavailable',
-    reason:'classification_failed'
-  });
+  mode:'unavailable',
+  reason:'classification_failed',
+  debug: upstreamError
+});
 }
     let parsed=null;try{parsed=JSON.parse(parseGeminiText(payload));}catch(_){ }
     const clean=sanitize(parsed,candidates,query,{assist_mode:assistMode,exclude_ids:assistMode==='missing_only'?matchedIds:[],max_ids:remainingSlots});
