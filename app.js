@@ -10,6 +10,8 @@ const RECENT_SEARCH_KEY = 'eodiga_recent_searches_v2';
 const CHECK_STATE_KEY = 'eodiga_check_state_v2';
 const DATA_CACHE_VERSION = '5.4.1';
 const classifierCache = new Map();
+const CLASSIFIER_CACHE_STORAGE_KEY = 'eodiga_classifier_cache_v727';
+const CLASSIFIER_CACHE_LIMIT = 30;
 const CAMPUS_MAP_URL = 'https://www.scnu.ac.kr/SCNU/cm/cntnts/cntntsView.do?cntntsId=1046&mi=1182';
 
 const PII_PATTERNS = [
@@ -1452,12 +1454,44 @@ function setLoading(on){
   if($('#searchBtn')) { $('#searchBtn').textContent = on ? '찾는 중…' : '어디가?'; $('#searchBtn').disabled=Boolean(on); }
 }
 
+function classifierCacheKey(query,context={}){
+  const assistMode=context.assist_mode==='missing_only'?'missing_only':'full';
+  const matched=(context.matched_service_ids||[]).slice(0,5).map(String);
+  const unresolved=(context.unresolved_clauses||[]).slice(0,5).map(x=>normalizeQuery(maskPersonalInfo(x)));
+  return JSON.stringify([normalizeQuery(maskPersonalInfo(query)),assistMode,matched,unresolved]);
+}
+function readClassifierCache(cacheKey){
+  if(classifierCache.has(cacheKey))return classifierCache.get(cacheKey);
+  try{
+    const raw=sessionStorage.getItem(CLASSIFIER_CACHE_STORAGE_KEY);
+    const rows=raw?JSON.parse(raw):[];
+    if(Array.isArray(rows)){
+      for(const row of rows){
+        if(Array.isArray(row)&&row.length===2&&row[0]===cacheKey&&row[1]?.mode==='classifier'){
+          classifierCache.set(cacheKey,row[1]);
+          return row[1];
+        }
+      }
+    }
+  }catch(_){ }
+  return null;
+}
+function writeClassifierCache(cacheKey,value){
+  // Never cache 429/503/timeouts/unavailable. A temporary quota or server error must be able to recover.
+  if(value?.mode!=='classifier')return;
+  classifierCache.set(cacheKey,value);
+  while(classifierCache.size>CLASSIFIER_CACHE_LIMIT)classifierCache.delete(classifierCache.keys().next().value);
+  try{
+    const rows=[...classifierCache.entries()].slice(-CLASSIFIER_CACHE_LIMIT);
+    sessionStorage.setItem(CLASSIFIER_CACHE_STORAGE_KEY,JSON.stringify(rows));
+  }catch(_){ }
+}
 async function classifyUncertainQuery(query, context={}){
   if(location.protocol === 'file:') return {mode:'unavailable',reason:'local_file'};
   const masked=maskPersonalInfo(query);
   const assistMode=context.assist_mode==='missing_only'?'missing_only':'full';
-  const cacheKey=JSON.stringify([masked,assistMode,context.matched_service_ids||[],context.unresolved_clauses||[]]);
-  if(classifierCache.has(cacheKey)) return classifierCache.get(cacheKey);
+  const cacheKey=classifierCacheKey(masked,context);
+  const cached=readClassifierCache(cacheKey);if(cached)return cached;
   if(pendingClassifierController) pendingClassifierController.abort();
   const controller=new AbortController();
   pendingClassifierController=controller;
@@ -1470,7 +1504,7 @@ async function classifyUncertainQuery(query, context={}){
       signal:controller.signal
     });
     if(!res.ok) return {mode:'unavailable'};
-    const value=await res.json();classifierCache.set(cacheKey,value);if(classifierCache.size>30)classifierCache.delete(classifierCache.keys().next().value);return value;
+    const value=await res.json();writeClassifierCache(cacheKey,value);return value;
   }catch(e){
     return {mode:'unavailable',reason:e?.name==='AbortError'?'timeout':'error'};
   }finally{
@@ -1954,6 +1988,62 @@ function shouldAssistMissingOnly(query,route){
   return (route.items||[]).length<5;
 }
 
+// FULL-assist gate -------------------------------------------------------------
+// "로컬 검색 0건"은 곧바로 "Gemini 호출"을 뜻하지 않는다.
+// Gemini는 (1) 캠퍼스 행정 대상/업무를 가리키는 명사 신호와 (2) 신청·발급·변경·문의·위치·기간 등
+// 라우팅 의도가 함께 있을 때만 호출한다. 이 positive gate는 문장 예외목록이 아니라
+// "업무 대상(object) + 행정 행위/질문(action)" 구조를 본다.
+const FULL_ASSIST_STRONG_OBJECTS=[
+  '학생증','신분증','성적표','재학증명','성적증명','졸업증명','증명서','장학재단','학자금','등록금','학비',
+  '휴학','복학','자퇴','재입학','전과','다전공','복수전공','부전공','수강신청','수강정정','성적정정','졸업',
+  '기숙사','생활관','통학버스','셔틀','동아리','학생회','교환학생','유학생','대학원','학군단','rotc','병역','군입대','군대',
+  '보건진료','보건소','보건','진료','상담센터','인권','성폭력','성희롱','도서관','연구윤리','irb','창업','메이커스페이스',
+  '향림통','lms','와이파이','wifi','주차','통학','분실물','졸업장','등록금분납','국가장학','근로장학'
+];
+const FULL_ASSIST_CONTEXT_OBJECTS=[
+  '카드','버스','모임','통장','계좌','차량','방','에어컨','냉방','난방','누수','전기','조명','수도','화장실','강의실','실습실','연구실',
+  '책','사물함','열람실','우산','노트북','프린터','증빙','서류','양식'
+];
+const FULL_ASSIST_ACTION_RE=/(신청|지원|접수|등록|발급|재발급|다시.{0,5}(?:받|만들)|받고\s*싶|받아야|받으려|만들고\s*싶|만들어야|잃어버|분실|훼손|정정|변경|바꾸|취소|철회|탈퇴|가입|예약|대여|빌리|반납|납부|내고\s*싶|환불|신고|고장|수리|안\s*(?:돼|되|나오|켜)|멈추|쉬고\s*싶|조회|확인|떼고\s*싶|출력|제출|문의|물어|찾아|찾고\s*싶|어디(?:로|에|서)?|어느\s*부서|연락처|전화번호|방법|절차|언제|기간|마감|얼마|비용|자격|조건|가능(?:해|한|한가|한지|여부)|누구(?:한테|에게)?)/i;
+const FULL_ASSIST_CAMPUS_CONTEXT_RE=/(순천대|순천대학교|국립순천대학교|학교|교내|캠퍼스|학과|학부|전공|대학|학생|교수|강의실|실습실|연구실|기숙사|생활관)/i;
+const FULL_ASSIST_EXTERNAL_CONTEXT_RE=/(넷플릭스|쿠팡|배민|배달의민족|은행|신용카드|체크카드|카드사|보험사|통신사|쇼핑몰|유튜브|인스타|틱톡|게임|카카오톡)/i;
+function fullAssistObjectSignals(query){
+  const n=normalizeQuery(query);const strong=[],contextual=[];
+  const tokens=clauseCoreTokens(query).map(t=>t.replace(/^(?:국립순천대학교|순천대학교|순천대|학교|교내|캠퍼스)/,'')).filter(Boolean);
+  const hasTerm=(term)=>{
+    const x=normalizeQuery(term);if(!x)return false;
+    // Very short nouns (방/책/차...) must be their own token. This prevents false hits such as 방 in 방법.
+    if(x.length<=2)return tokens.some(t=>t===x||(t.startsWith(x)&&/^(?:받|신청|문의|예약|발급|재발급|잃|고장|수리|대여|빌|반납|가입|탈퇴|신고|납부|환불)/.test(t.slice(x.length))));
+    return n.includes(x);
+  };
+  for(const term of FULL_ASSIST_STRONG_OBJECTS){if(hasTerm(term))strong.push(term);}
+  for(const term of FULL_ASSIST_CONTEXT_OBJECTS){if(hasTerm(term))contextual.push(term);}
+  return {strong:[...new Set(strong)].slice(0,5),contextual:[...new Set(contextual)].slice(0,5)};
+}
+function fullAssistGate(query,route={}){
+  const raw=String(query||'').trim();const n=normalizeQuery(raw);
+  if(!n)return {allow:false,reason:'empty',score:0,objects:[]};
+  if(isObviousNonCampus(raw)||FULL_ASSIST_EXTERNAL_CONTEXT_RE.test(raw))return {allow:false,reason:'obvious_non_campus',score:0,objects:[]};
+  const objects=fullAssistObjectSignals(raw);
+  const explicitConcept=Boolean(hasExplicitCampusConceptWord(raw)||detectConcept(raw));
+  const campusContext=FULL_ASSIST_CAMPUS_CONTEXT_RE.test(raw);
+  const routingAction=FULL_ASSIST_ACTION_RE.test(raw);
+  const strongObject=objects.strong.length>0||explicitConcept;
+  const contextualObject=objects.contextual.length>0;
+  const coreTokens=clauseCoreTokens(raw).filter(t=>t.length>=2&&!['학교','순천대','순천대학교','교내','캠퍼스','학생','대학'].includes(t));
+  const keywordLike=coreTokens.length<=3&&!/[.!?。！？]/.test(raw)&&raw.length<=30;
+  let score=0;if(strongObject)score+=4;if(contextualObject)score+=2;if(campusContext)score+=2;if(routingAction)score+=3;
+  // Normal sentence: a routing action/question must point to a campus/admin object.
+  if(routingAction&&(strongObject||contextualObject||campusContext&&hasIndependentTaskEvidence(raw))){
+    // "학교 + 어디/언제" alone is still just a facet question with no task object.
+    if(!strongObject&&!contextualObject&&campusContext&&!hasIndependentTaskEvidence(raw))return {allow:false,reason:'no_task_object',score,objects:[]};
+    return {allow:true,reason:'task_signal',score,objects:[...objects.strong,...objects.contextual].slice(0,5)};
+  }
+  // Search boxes are also used as keyword boxes. Only strong campus/admin objects get this verb-less path.
+  if(keywordLike&&strongObject)return {allow:true,reason:'campus_keyword',score,objects:[...objects.strong].slice(0,5)};
+  return {allow:false,reason:'insufficient_admin_signal',score,objects:[...objects.strong,...objects.contextual].slice(0,5)};
+}
+
 function renderAssistPending(){
  activeResultQuery='';clearResultSummary();
  $('#resultHeading').textContent='입력 내용을 조금 더 확인하고 있어요.';
@@ -1988,9 +2078,10 @@ async function performSearch(options={}){
    }).catch(()=>{if(requestId===searchSequence)renderUnresolvedNotice(unresolved);}).finally(()=>{if(requestId===searchSequence)setLoading(false);});return;
  }
  const aiBlockedReasons=new Set(['out_of_scope','out_of_scope_other_university','role_mismatch','out_of_scope_general_advice','generation_not_routing','no_action']);
- // A deterministic no-signal result is exactly where the classifier adds value: students should not
- // need to know the catalog's official wording. Explicitly out-of-scope cases still never call Gemini.
- const canAssist=location.protocol!=='file:' && !aiBlockedReasons.has(route.reason);
+ // FULL Gemini is not a catch-all for every local miss. It is allowed only when a positive local gate
+ // sees evidence that the input is genuinely asking for a campus administrative task/department.
+ const fullGate=fullAssistGate(q,route);
+ const canAssist=location.protocol!=='file:' && !aiBlockedReasons.has(route.reason) && fullGate.allow;
  if(!canAssist){renderNoResult(q);return;}
  renderAssistPending();setLoading(true);
  classifyUncertainQuery(q,{assist_mode:'full'}).then(r=>{
