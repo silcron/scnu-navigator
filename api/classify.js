@@ -170,38 +170,161 @@ module.exports=async function handler(req,res){
     '후보 목록:',list
   ].join('\n');
   const model=process.env.GEMINI_MODEL||'gemini-3.7-flash';
-  const controller=new AbortController();const timer=setTimeout(()=>controller.abort(),3600);
+const toBoundedInt=(value,fallback,min,max)=>{const n=Number(value);return Number.isFinite(n)?Math.max(min,Math.min(max,Math.trunc(n))):fallback;};
+const timeoutMs=toBoundedInt(process.env.GEMINI_TIMEOUT_MS,10000,1000,20000);
+const retryDelayMs=toBoundedInt(process.env.GEMINI_RETRY_DELAY_MS,1000,0,5000);
+const retryableStatus=status=>status===429||(status>=500&&status<=599);
+const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));
+
+const requestBody=JSON.stringify({
+  contents:[{role:'user',parts:[{text:prompt}]}],
+  generationConfig:{
+    thinkingConfig:{thinkingLevel:'low'},
+    responseFormat:{
+      text:{
+        mimeType:'APPLICATION_JSON',
+        schema:{
+          type:'object',
+          properties:{
+            intents:{
+              type:'array',
+              maxItems:remainingSlots,
+              items:{
+                type:'object',
+                properties:{
+                  status:{type:'string',enum:['matched','ambiguous','not_found','out_of_scope']},
+                  service_id:{type:'string'},
+                  evidence_span:{type:'string'}
+                },
+                required:['status','service_id','evidence_span'],
+                additionalProperties:false
+              }
+            },
+            confidence:{type:'string',enum:['high','medium','low']},
+            needs_clarification:{type:'boolean'},
+            coverage_complete:{type:'boolean'}
+          },
+          required:['intents','confidence','needs_clarification','coverage_complete'],
+          additionalProperties:false
+        }
+      }
+    }
+  }
+});
+
+const endpoint=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
+
+let upstream=null;
+
+for(let attempt=1;attempt<=2;attempt++){
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),timeoutMs);
+
   try{
-    const response=await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,{
-      method:'POST',headers:{'Content-Type':'application/json','x-goog-api-key':apiKey},signal:controller.signal,
-      body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{thinkingConfig:{thinkingLevel:'low'},responseFormat:{text:{mimeType:'APPLICATION_JSON',schema:{type:'object',properties:{intents:{type:'array',maxItems:remainingSlots,items:{type:'object',properties:{status:{type:'string',enum:['matched','ambiguous','not_found','out_of_scope']},service_id:{type:'string'},evidence_span:{type:'string'}},required:['status','service_id','evidence_span'],additionalProperties:false}},confidence:{type:'string',enum:['high','medium','low']},needs_clarification:{type:'boolean'},coverage_complete:{type:'boolean'}},required:['intents','confidence','needs_clarification','coverage_complete'],additionalProperties:false}}}}})
+    const response=await fetch(endpoint,{
+      method:'POST',
+      headers:{
+        'Content-Type':'application/json',
+        'x-goog-api-key':apiKey
+      },
+      signal:controller.signal,
+      body:requestBody
     });
-    const payload=await response.json();
 
-if(!response.ok){
-  const upstreamError={
-    status:response.status,
-    code:payload?.error?.code??null,
-    error_status:payload?.error?.status??null,
-    message:String(payload?.error?.message||'').slice(0,600),
-    model
-  };
+    let payload={};
+    try{
+      payload=await response.json();
+    }catch(_){
+      payload={};
+    }
 
-  console.error(
-    '[Gemini classify upstream error]',
-    JSON.stringify(upstreamError)
-  );
+    if(response.ok){
+      upstream={ok:true,payload,attempts:attempt};
+      break;
+    }
+
+    const debug={
+      status:response.status||null,
+      code:payload?.error?.code??null,
+      error_status:payload?.error?.status??null,
+      message:String(payload?.error?.message||'').slice(0,600),
+      model,
+      attempts:attempt
+    };
+
+    if(attempt<2&&retryableStatus(Number(response.status))){
+      clearTimeout(timer);
+      if(retryDelayMs)await sleep(retryDelayMs);
+      continue;
+    }
+
+    upstream={ok:false,kind:'http',debug};
+    break;
+
+  }catch(error){
+    const isTimeout=error?.name==='AbortError';
+
+    if(attempt<2&&(isTimeout||error?.name==='TypeError')){
+      clearTimeout(timer);
+      if(retryDelayMs)await sleep(retryDelayMs);
+      continue;
+    }
+
+    upstream={
+      ok:false,
+      kind:isTimeout?'timeout':'network',
+      debug:{
+        status:null,
+        code:null,
+        error_status:null,
+        message:String(error?.message||'').slice(0,600),
+        model,
+        attempts:attempt
+      }
+    };
+    break;
+
+  }finally{
+    clearTimeout(timer);
+  }
+}
+
+if(!upstream?.ok){
+  const reason=
+    upstream?.kind==='timeout'
+      ?'classification_timeout'
+      :upstream?.kind==='http'
+        ?'classification_failed'
+        :'classification_error';
 
   return res.status(200).json({
-  mode:'unavailable',
-  reason:'classification_failed',
-  debug: upstreamError
-});
+    mode:'unavailable',
+    reason,
+    debug:upstream?.debug||{model,attempts:2}
+  });
 }
-    let parsed=null;try{parsed=JSON.parse(parseGeminiText(payload));}catch(_){ }
-    const clean=sanitize(parsed,candidates,query,{assist_mode:assistMode,exclude_ids:assistMode==='missing_only'?matchedIds:[],max_ids:remainingSlots});
-    return clean?res.status(200).json(clean):res.status(200).json({mode:'unavailable',reason:'classification_invalid'});
-  }catch(error){return res.status(200).json({mode:'unavailable',reason:error?.name==='AbortError'?'classification_timeout':'classification_error'});}finally{clearTimeout(timer);}
-};
 
+let parsed=null;
+try{
+  parsed=JSON.parse(parseGeminiText(upstream.payload));
+}catch(_){}
+
+const clean=sanitize(
+  parsed,
+  candidates,
+  query,
+  {
+    assist_mode:assistMode,
+    exclude_ids:assistMode==='missing_only'?matchedIds:[],
+    max_ids:remainingSlots
+  }
+);
+
+return clean
+  ?res.status(200).json(clean)
+  :res.status(200).json({
+      mode:'unavailable',
+      reason:'classification_invalid'
+    });
+};
 module.exports._test={normalize,tokens,maskPersonalInfo,intentGroup,canonicalRepresentatives,shortlist,sanitize};
