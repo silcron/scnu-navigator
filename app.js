@@ -1432,7 +1432,7 @@ async function classifyUncertainQuery(query, context={}){
   if(pendingClassifierController) pendingClassifierController.abort();
   const controller=new AbortController();
   pendingClassifierController=controller;
-  const timer=setTimeout(()=>controller.abort(),4200);
+const timer=setTimeout(()=>controller.abort(),24000);
   try{
     const res = await fetch('/api/classify', {
       method:'POST',
