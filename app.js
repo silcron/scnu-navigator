@@ -1,12 +1,29 @@
 let dataset = null;
 let services = [];
 let currentCategory = '전체';
+let browseShowAllCategories = false;
+const BROWSE_PREVIEW_LIMIT = 12;
 let pendingClassifierController = null;
 let searchSequence = 0;
 let activeResultQuery = '';
-const RECENT_SEARCH_KEY = 'eodiga_recent_searches_v1';
-const CHECK_STATE_KEY = 'eodiga_check_state_v1';
+const RECENT_SEARCH_KEY = 'eodiga_recent_searches_v2';
+const CHECK_STATE_KEY = 'eodiga_check_state_v2';
+const DATA_CACHE_VERSION = '5.4.1';
+const classifierCache = new Map();
 const CAMPUS_MAP_URL = 'https://www.scnu.ac.kr/SCNU/cm/cntnts/cntntsView.do?cntntsId=1046&mi=1182';
+
+const PII_PATTERNS = [
+  [/\b\d{6}\s*[- ]?\s*[1-4]\d{6}\b/g, '[주민등록번호]'],
+  [/\b01[016789][ -]?\d{3,4}[ -]?\d{4}\b/g, '[전화번호]'],
+  [/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[이메일]'],
+  [/\b(?:20)?\d{2}[ -]?\d{5,7}\b/g, '[학번 등 번호]']
+];
+function maskPersonalInfo(text=''){
+  let out=String(text||'');
+  for(const [re,label] of PII_PATTERNS) out=out.replace(re,label);
+  return out;
+}
+function containsPersonalInfo(text=''){ return maskPersonalInfo(text)!==String(text||''); }
 
 const $ = (s) => document.querySelector(s);
 const $$ = (s) => [...document.querySelectorAll(s)];
@@ -188,6 +205,9 @@ function compositeRouteId(query){
 }
 
 let SEARCH_INDEX=[];
+let SEARCH_DF=new Map();
+let SEARCH_DOC_COUNT=0;
+let pendingClarificationIds=[];
 const SEARCH_CONCEPTS=[
  {domain:'counseling',aliases:['성폭행','성폭력','성추행','강제추행','성희롱','데이트폭력','디지털성범죄','불법촬영','몰카'],preferred:['route_rights_general','human_rights_contact','harassment']},
  {domain:'counseling',aliases:['인권침해','갑질','부당대우','차별','괴롭힘','폭언','모욕','따돌림'],preferred:['route_rights_general','human_rights_contact']},
@@ -265,12 +285,16 @@ function normalizeQuery(x=''){try{return String(x).normalize('NFKC').toLowerCase
 function splitQuery(x=''){return String(x).normalize('NFKC').toLowerCase().replace(/[^0-9a-z가-힣]+/g,' ').split(/\s+/).filter(Boolean);}
 function buildSearchIndex(){
  SEARCH_INDEX=services.map(s=>{
-   const high=[s.title,s.department?.name,...(s.route_keywords||[])].filter(Boolean).map(normalizeQuery);
-   const mid=[s.category,...(s.search_terms||[]),...(s.situations||[])].filter(Boolean).map(normalizeQuery);
-   const low=[s.description,...(s.notes||[])].filter(Boolean).map(normalizeQuery);
+   const highRaw=[s.title,s.department?.name,...(s.aliases||[]),...(s.route_keywords||[])].filter(Boolean);
+   const midRaw=[s.category,...(s.search_terms||[]),...(s.situations||[])].filter(Boolean);
+   const lowRaw=[s.description].filter(Boolean);
+   const high=highRaw.map(normalizeQuery),mid=midRaw.map(normalizeQuery),low=lowRaw.map(normalizeQuery);
    const all=[...high,...mid,...low].filter(Boolean);
-   return {service:s,high,mid,low,all,joined:all.join(' '),title:normalizeQuery(s.title),dept:normalizeQuery(s.department?.name||'')};
+   const tokenSet=new Set([...highRaw,...midRaw,...lowRaw].flatMap(splitQuery).map(normalizeQuery).filter(x=>x.length>=2&&!GENERIC_SEARCH_TERMS.has(x)));
+   return {service:s,high,mid,low,all,joined:all.join(' '),title:normalizeQuery(s.title),dept:normalizeQuery(s.department?.name||''),tokenSet};
  });
+ SEARCH_DOC_COUNT=SEARCH_INDEX.length;SEARCH_DF=new Map();
+ for(const e of SEARCH_INDEX)for(const t of e.tokenSet)SEARCH_DF.set(t,(SEARCH_DF.get(t)||0)+1);
 }
 function detectConcept(q){
  const norms=[normalizeQuery(q),normalizeQuery(loosenQuery(q))].filter(Boolean);let best=null;
@@ -292,7 +316,7 @@ function scoreSearchEntry(e,q,concept){
  if(e.dept===n)s=Math.max(s,2200); else if(e.dept&&e.dept.includes(n))s=Math.max(s,1250+n.length*25);
  for(const x of e.high){if(x===n)s=Math.max(s,2400);else if(x.includes(n))s=Math.max(s,1320+n.length*30);else if(n.includes(x)&&x.length>=2&&!GENERIC_SEARCH_TERMS.has(x))s=Math.max(s,930+x.length*20);}
  for(const x of e.mid){if(x===n)s=Math.max(s,2100);else if(x.includes(n))s=Math.max(s,1080+n.length*27);else if(n.includes(x)&&x.length>=2&&!GENERIC_SEARCH_TERMS.has(x))s=Math.max(s,760+x.length*17);}
- const toks=splitQuery(q).map(normalizeQuery).filter(x=>x.length>=2);if(toks.length>1){let hit=0;for(const t of toks)if(e.joined.includes(t))hit++;s+=hit*105;if(hit===toks.length)s+=220;}
+ const toks=splitQuery(q).map(normalizeQuery).filter(x=>x.length>=2);if(toks.length){let hit=0,idfBonus=0;for(const t of toks){if(e.joined.includes(t)){hit++;const df=SEARCH_DF.get(t)||SEARCH_DOC_COUNT;const idf=Math.log((SEARCH_DOC_COUNT+1)/(df+1))+1;idfBonus+=Math.min(95,Math.round(26*idf));}}s+=hit*105+idfBonus;if(toks.length>1&&hit===toks.length)s+=220;}
  if(concept){
    const base=s;const i=concept.preferred.indexOf(e.service.id);const alias=normalizeQuery(concept.alias||'');
    const detailed=GENERIC_CONCEPT_ALIASES.has(alias)&&n.length>=alias.length+2;
@@ -304,7 +328,7 @@ function scoreSearchEntry(e,q,concept){
 function fuzzyFallback(q,ranked){
  const n=normalizeQuery(q);if(n.length<3)return ranked;const candidates=[];
  for(const e of SEARCH_INDEX){let sim=diceSimilarity(n,e.title);if(sim>=.48)candidates.push({service:e.service,score:sim*620+250});else if(n.length<=10&&e.title.length<=14&&editDistanceOne(n,e.title))candidates.push({service:e.service,score:620});}
- return candidates.sort((a,b)=>b.score-a.score);
+ return candidates.sort((a,b)=>b.score-a.score||a.service.id.localeCompare(b.service.id));
 }
 const BROAD_CONCEPTS=new Set(['버스','통학','통학버스','통학버스대여','셔틀','장학','장학금','기숙사','생활관','도서관','취업','학생증','시설','입학','수시','정시','편입','교직','연구','창업','전공','성적','학점','졸업','등록금','상담','전기','에어컨','수도','배관','조명','수업','과목','학비','자료공개','사업단','센터']);
 const MULTI_DOMAIN_BROAD=new Set(['버스','상담','편입','전공']);
@@ -452,7 +476,7 @@ function strongRouteKeywordMatches(q){
    }
    if(best)out.push({service:s,score:best});
  }
- return out.sort((a,b)=>b.score-a.score);
+ return out.sort((a,b)=>b.score-a.score||a.service.id.localeCompare(b.service.id));
 }
 
 function isObviousNonCampus(q){
@@ -524,6 +548,7 @@ function isSafeStandaloneQuery(q){
  const n=normalizeQuery(q);if(!n)return false;
  if(hasCampusIntentSignal(q)||BROAD_CONCEPTS.has(n)||STANDALONE_CAMPUS_TERMS.has(n))return true;
  if(SEARCH_CONCEPTS.some(c=>(c.aliases||[]).some(a=>normalizeQuery(a)===n)))return true;
+ const routeOwners=SEARCH_INDEX.filter(e=>(e.service.route_keywords||[]).some(k=>normalizeQuery(k)===n));if(n.length>=3&&routeOwners.length===1&&!['대출','반납','입실','퇴실','세입','인건비','원천세','특허','기부','기탁','사물함','수서'].includes(n))return true;
  return SEARCH_INDEX.some(e=>['academic_directory','academic_directory_general','organization_registry'].includes(e.service.kind)&&(e.service.route_keywords||[]).some(k=>normalizeQuery(k)===n));
 }
 
@@ -540,7 +565,7 @@ function exactSituationMatches(q){
      out.push({service:e.service,score});break;
    }
  }
- return out.sort((a,b)=>b.score-a.score);
+ return out.sort((a,b)=>b.score-a.score||a.service.id.localeCompare(b.service.id));
 }
 
 function academicDirectoryIntentMatches(q){
@@ -557,7 +582,7 @@ function academicDirectoryIntentMatches(q){
    for(const x of [...e.high,...e.mid]){if(!x||x.length<3)continue;if(n.includes(x))best=Math.max(best,5600+x.length);}
    if(best)out.push({service:e.service,score:best});
  }
- return out.sort((a,b)=>b.score-a.score);
+ return out.sort((a,b)=>b.score-a.score||a.service.id.localeCompare(b.service.id));
 }
 
 function exactAcademicDirectoryMatches(q){
@@ -585,14 +610,24 @@ function academicDirectoryMatches(q){
    }
    if(best)out.push({service:e.service,score:best});
  }
- return out.sort((a,b)=>b.score-a.score);
+ return out.sort((a,b)=>b.score-a.score||a.service.id.localeCompare(b.service.id));
 }
 
 function contrastTail(q){
  const raw=String(q||'').trim();
- const m=raw.match(/(?:말고|아니고|아니라|말고요|보다는|대신)\s*(.+)$/);
- if(!m)return null;
- const tail=(m[1]||'').trim();return normalizeQuery(tail).length>=2?tail:null;
+ // Do not mistake the additive connector “뿐만 아니라” for the contrast marker “아니라”.
+ // Scan markers one by one so a real contrast later in the sentence can still be honored.
+ const re=/(말고요|말고|아니고|아니라|보다는|대신)\s*/g; let m;
+ while((m=re.exec(raw))){
+   const marker=m[1]; const prefix=raw.slice(0,m.index);
+   if((marker==='말고'||marker==='말고요')&&prefix.endsWith('기'))continue;
+   if(marker==='아니라'&&/뿐만\s*$/.test(prefix))continue;
+   // “대신” can mean representation/on-behalf-of, not contrast: “부모님이 대신 휴학 신청”.
+   if(marker==='대신'&&/(?:부모님|보호자|가족|대리인|친구)(?:이|가|은|는)?\s*$/.test(prefix))continue;
+   const tail=raw.slice(re.lastIndex).trim();
+   if(normalizeQuery(tail).length>=2)return tail;
+ }
+ return null;
 }
 const DOMAIN_ANCHOR={
  dorm:'기숙사',student:'학생',academic:'학사',finance:'등록금',admission:'입학',facilities:'시설',it:'학교 전산',international:'국제',career:'취업',research:'연구',research_ethics:'연구윤리',counseling:'상담',startup:'창업',development:'발전기금',library:'도서관',admin:'학교 행정',graduate_school:'대학원',education_innovation:'교육혁신'
@@ -609,22 +644,45 @@ function splitMultiIntent(q){
  const raw=String(q||'').trim();if(!raw)return [];
  let marked=raw;
 
- marked=marked.replace(/[.!?。！？]+/g,'|||');
+ // Preserve dotted abbreviations / numbered official names such as A.U.R.A and 10.19연구소.
+ const DOT_HOLD='__EODIGA_DOT__';
+ marked=marked.replace(/([A-Za-z0-9])\.(?=[A-Za-z0-9])/g,'$1'+DOT_HOLD);
+ marked=marked.replace(/[.!?。！？]+/g,'|||').replaceAll(DOT_HOLD,'.');
  marked=marked.replace(/[;,，；/＋+&＆|\n]+/g,'|||');
- marked=marked.replace(/\s*(?:그리고|또한|또|및)\s*/g,'|||');
+ const nextConcept='(?:휴학|복학|자퇴|재입학|전과|학과|다전공|복수전공|부전공|학생증|신분증|국가장학금|장학금|등록금|학비|수강|성적|학점|졸업|기숙사|생활관|도서관|통학버스|주차|ROTC|rotc|학군단|교환학생|취업|진로|상담|인권|보건|시설|누수|에어컨|와이파이|향림통|LMS|lms|증명서|재학증명서|대학원|창업|연구|IRB|irb|사업단|우산|노트북)';
+ // Split clear additive connectors, but never inside real words such as “또래상담”.
+ marked=marked.replace(/(?:^|\s+)(?:뿐만\s+아니라|그리고|또한|동시에|게다가|및)(?=\s+|$)/g,'|||');
+ // “또” is ambiguous: it can mean a new request (A, and also B) or “again” inside one
+ // atomic request (“인정받은 과목 또 들어도 돼”). Split it only after a complete
+ // request ending or when the following span clearly starts another campus concept.
+ marked=marked.replace(/(?:^|\s+)또(?=\s+|$)/g,(m,offset,whole)=>{
+   const before=whole.slice(0,offset).split('|||').pop().trim();
+   const after=whole.slice(offset+m.length).trimStart();
+   const leftComplete=/(?:요|니다|습니다|싶어|궁금해|필요해|알고싶어|알고 싶어|했어|됐어|났어|렸어)$/.test(before);
+   const rightConcept=new RegExp('^'+nextConcept,'i').test(after);
+   const afterN=normalizeQuery(after);
+   const rightCatalog=SEARCH_INDEX.some(e=>[e.title,...e.high,...e.mid].some(t=>t&&t.length>=3&&afterN.startsWith(t)));
+   // If “또” is followed only by a continuation verb, keep it inside the same atomic request:
+   // “편입 때 인정받은 과목 또 들어도 돼”.
+   const rightContinuation=/^(?:다시|들어|듣|받아|받|해도|하면|해서|해|되어|돼|되나|가능|싶어|궁금|필요)/.test(afterN);
+   return (leftComplete||rightConcept||(!rightContinuation&&rightCatalog))?'|||':m;
+ });
+ marked=marked.replace(new RegExp('([가-힣A-Za-z0-9]{2,}?)(이랑|랑|과|와)\\s+(?='+nextConcept+')','gi'),(m,left,conj)=>{
+   // A trailing '과' is often part of a real department/major name (e.g. 화학교육과),
+   // not the Korean conjunction 'and'. Protect catalog-backed entity spans before splitting (S10).
+   if(conj==='과'){const candidate=normalizeQuery(left+conj);const protectedName=SEARCH_INDEX.some(e=>e.title===candidate||e.high.includes(candidate)||e.mid.includes(candidate));if(protectedName)return m;}
+   return left+'|||';
+ });
 
- const nextConcept='(?:휴학|복학|자퇴|재입학|전과|학과|다전공|복수전공|부전공|학생증|신분증|국가장학금|장학금|등록금|학비|수강|성적|학점|졸업|기숙사|생활관|도서관|통학버스|주차|ROTC|rotc|학군단|교환학생|취업|진로|상담|인권|보건|시설|누수|에어컨|와이파이|향림통|LMS|lms|증명서|재학증명서|대학원|창업|연구|IRB|irb|사업단)';
- marked=marked.replace(new RegExp('([가-힣A-Za-z0-9]{2,}?)(?:이랑|랑|과|와)\\s+(?='+nextConcept+')','gi'),'$1|||');
-
- const sentenceEnd=new RegExp('(싶어요|싶습니다|싶어|궁금해요|궁금합니다|궁금해|필요해요|필요합니다|필요해|알고 싶어요|알고싶어요|알고 싶어|알고싶어)\\s+(?='+nextConcept+')','g');
+ const sentenceEnd=new RegExp('(싶어요|싶습니다|싶어|궁금해요|궁금합니다|궁금해|필요해요|필요합니다|필요해|알고 싶어요|알고싶어요|알고 싶어|알고싶어|해야해요|해야해|해야돼요|해야돼|해야합니다|해야 합니다|가야해요|가야해|들려야해요|들려야해|문의해야해요|문의해야해)\\s+(?='+nextConcept+')','g');
  marked=marked.replace(sentenceEnd,'$1|||');
 
  marked=marked.replace(/\s*첨삭하고\s+/g,' 첨삭|||');
  marked=marked.replace(/(발전기금|발전지원금)\s*내고\s+/g,'$1 내고|||');
- marked=marked.replace(/\s*(확인|변경|재발급|발급|신청|예약|납부|결제|취소|조회|정정|등록|제출|신고|문의)(?:도)?하고\s+(?!싶(?:어|어요|다|습니다|고))/g,' $1|||');
+ marked=marked.replace(/\s*(확인|변경|재발급|발급|신청|예약|납부|결제|취소|조회|정정|등록|제출|신고|문의)(?:도)?하고(?!\s*싶(?:어|어요|다|습니다|고))\s+/g,' $1|||');
  marked=marked.replace(new RegExp('('+nextConcept+')(?:도)?하고\\s+(?='+nextConcept+')','gi'),'$1|||');
- marked=marked.replace(/([가-힣A-Za-z0-9]+(?:했(?:었)?고|했고|됐고|있고|없고|렸고|냈고|안되고|되고|싶고|궁금하고|필요하고))\s+/g,'$1|||');
- marked=marked.replace(/\s+(?:받고|받았고)\s+(?!싶(?:어|어요|다|습니다))/g,'|||');
+ marked=marked.replace(/([가-힣A-Za-z0-9]+(?:했(?:었)?고|했고|됐고|있고|없고|렸고|냈고|났고|안되고|되고|싶고|궁금하고|필요하고))\s+/g,'$1|||');
+ marked=marked.replace(/\s+(?:받고|받았고)(?!\s*싶(?:어|어요|다|습니다|고))\s+/g,'|||');
  marked=marked.replace(/\s+(?:싶고|궁금하고|필요하고|알고싶고)\s+/g,'|||');
 
  const longEntities=['AI인재양성부트캠프사업단','SW중심대학사업단','RISE사업단','라이즈사업단','GTEP사업단'];
@@ -645,7 +703,24 @@ function splitMultiIntent(q){
  const parts=marked.split('|||').map(x=>x.trim()).filter(x=>normalizeQuery(x).length>=2);
  const uniq=[];const seen=new Set();
  for(const p of parts){const n=normalizeQuery(p);if(!seen.has(n)){seen.add(n);uniq.push(p);}}
- return uniq.slice(0,5);
+ return uniq;
+}
+
+function isGenericMultiFiller(part){
+ const n=normalizeQuery(part); if(!n)return true;
+ if(new Set(['순천대학교업무질문인데','순천대업무질문인데','학교업무질문인데','순천대학교업무질문','순천대업무질문','학교업무질문','학교에서좀알아보려고요','학교에서알아보려고요','순천대학교에서여러가지가궁금해요','순천대에서여러가지가궁금해요','이것저것확인하고싶어요','좀알려주세요','어디로가면되는지알려주세요','관련부서가궁금해요','확인부탁해요']).has(n))return true;
+ // Keep this deliberately narrow: only discourse wrappers with no concrete campus concept.
+ if(partHasExplicitConcept(part))return false;
+ return /^(?:순천대학교|순천대|학교)?(?:에서)?(?:여러가지|이것저것)?(?:학교)?업무?(?:질문|문의)?(?:인데|이에요|예요|입니다|드려요|드립니다)?$/.test(n);
+}
+function trimMultiClauseWrapper(part){
+ let x=String(part||'').trim();
+ // Remove only generic discourse wrappers; preserve any concrete campus concept.
+ const heads=[/^(?:순천대학교|순천대)\s*(?:학교\s*)?업무\s*(?:질문|문의)?(?:인데|이에요|예요|입니다)?\s*/,/^학교\s*업무\s*(?:질문|문의)?(?:인데|이에요|예요|입니다)?\s*/];
+ for(const re of heads)x=x.replace(re,'').trim();
+ const tails=[/\s*좀\s*알려주세요\s*$/,/\s*어디로\s*가면\s*되는지\s*알려주세요\s*$/,/\s*관련\s*부서가\s*궁금해요\s*$/,/\s*확인\s*부탁해요\s*$/];
+ for(const re of tails)x=x.replace(re,'').trim();
+ return x||String(part||'').trim();
 }
 
 function organizationNameTypoMatches(q){
@@ -675,7 +750,7 @@ function officialEntityMatches(q){
    }
    if(best)out.push({service:e.service,score:best});
  }
- return out.sort((a,b)=>b.score-a.score);
+ return out.sort((a,b)=>b.score-a.score||a.service.id.localeCompare(b.service.id));
 }
 
 function explicitAcademicDirectoryMatches(q){
@@ -685,13 +760,424 @@ function explicitAcademicDirectoryMatches(q){
  return academicDirectoryIntentMatches(q);
 }
 
-function searchCampusServices(query,metaGuard=false){
+const ATOMIC_MULTI_GUARD_IDS=new Set([
+ 'return_course_before_status','leave_course_registration_effect','military_return','military_leave_grade_recognition',
+ 'leave_convert_to_military','return_before_discharge','graduation_while_on_leave','major_transfer_credit_requirement',
+ 'transfer_duplicate_course'
+]);
+const ATOMIC_MULTI_GUARD_REASONS=new Set([
+ 'unresolved_relation','out_of_scope_other_university','role_mismatch','ambiguous_location','ambiguous_term',
+ 'unsupported_item','out_of_scope_general_advice','generation_not_routing','no_action','out_of_scope'
+]);
+function shouldKeepAtomicCoreResult(route){
+ if(!route)return false;
+ if(ATOMIC_MULTI_GUARD_REASONS.has(route.reason))return true;
+ return (route.items||[]).some(x=>ATOMIC_MULTI_GUARD_IDS.has(x?.service?.id));
+}
+function shouldAlwaysKeepCoreSafety(route){return !!route&&ATOMIC_MULTI_GUARD_REASONS.has(route.reason);}
+function hasExplicitEnumerationSyntax(q){
+ const raw=String(q||'').normalize('NFKC').toLowerCase();
+ if(/[,;]|(?:^|[.!?]\s*)[^.!?]+[.!?]\s*[^.!?]+/.test(raw))return true;
+ if(/(?:그리고|또한|게다가|둘\s*다|이랑|랑\s+.*(?:둘\s*다|도\s))/.test(raw))return true;
+ if(/먼저.+(?:하고\s*나서|처리하고\s*나서|처리하고나서).+(?:도|또)/.test(raw))return true;
+ const doCount=(raw.match(/도\s*(?:해야|하고|궁금|필요|문의|확인|알아|처리|신청|받|가|들르|들려)/g)||[]).length;
+ if(doCount>=2)return true;
+ return false;
+}
+function hasStrongAtomicRelationshipSyntax(q){
+ const raw=String(q||'').normalize('NFKC').toLowerCase(),n=normalizeQuery(q);
+ if(/(차이|비교|영향|조건|요건|가능\s*여부)/.test(raw))return true;
+ if(/(?:하면|할\s*때|중인데|중에|상태(?:에서)?|신청\s*전(?:에)?|하기\s*전(?:에)?).*(?:어떻게|가능|할\s*수|받을\s*수|돼|되나|되나요|처리|취소|소멸)/.test(raw))return true;
+ if(/(?:전과|복학|휴학).*(?:전(?:에)?|중(?:에)?|상태).*(?:학점|수강신청|졸업).*(?:확인|가능|조건|요건|어떻게|돼|되나)/.test(raw))return true;
+ if(/(?:전과|복학|휴학)\s*하고\s*(?:수강신청|졸업|학점|등록금).*(?:어떻게|가능|할\s*수|돼|되나|되나요|영향)/.test(raw))return true;
+ if(/(?:군휴학|병역휴학).*(?:후|끝나|전역).*(?:복학)/.test(raw))return true;
+ if(/(?:전과|복학|휴학).*(?:하려면|신청하려면|하려고).*(?:몇\s*학점|학점.*(?:필요|이수|충족))/.test(raw))return true;
+ if(n.includes('휴학하면국가장학금')&&(n.includes('받을수')||n.includes('가능')))return true;
+ return false;
+}
+function canonicalizeMultiClauseEnding(part){
+ let x=String(part||'').trim();
+ const rules=[
+   [/하고\s*싶고$/,'하고 싶어'],[/가고\s*싶고$/,'가고 싶어'],[/받고\s*싶고$/,'받고 싶어'],[/알고\s*싶고$/,'알고 싶어'],
+   [/궁금하고$/,'궁금해'],[/필요하고$/,'필요해'],[/잃어버렸고$/,'잃어버렸어'],[/고장났고$/,'고장났어'],
+   [/났고$/,'났어'],[/됐고$/,'됐어'],[/있고$/,'있어'],[/없고$/,'없어'],[/했고$/,'했어']
+ ];
+ for(const [re,to] of rules){if(re.test(x)){x=x.replace(re,to);break;}}
+ return x;
+}
+function clauseNegatesService(part,service){
+ const n=normalizeQuery(part),id=service?.id||'';
+ if(!n||!id)return false;
+ if(id==='student_id_reissue'&&(n.includes('안잃어버')||n.includes('분실아니')||n.includes('잃어버린건아니')))return true;
+ if(id==='leave_general'&&(n.includes('휴학은아니')||n.includes('휴학아니')||n.includes('휴학말고')))return true;
+ if(id==='sch_national'&&(n.includes('국가장학금말고')||n.includes('국가장학금은이미')||n.includes('국가장학금이미')))return true;
+ if(id==='dorm_internet'&&(n.includes('기숙사인터넷은괜찮')||n.includes('생활관인터넷은괜찮')))return true;
+ return false;
+}
+function collectResolvedMultiParts(parts){
+ const collected=[];const seen=new Set();let sharedDomain=null;let resolvedPartCount=0;
+ for(const rawPart of parts){
+   if(isGenericMultiFiller(rawPart))continue;
+   const part=canonicalizeMultiClauseEnding(trimMultiClauseWrapper(rawPart));if(!part||normalizeQuery(part).length<2)continue;
+   let pr=(parts.length>=2?resolveImplicitMultiChain(part,1):null)||searchCampusServices(part,true);
+   if(sharedDomain&&(!partHasExplicitConcept(part))){
+     const topDomain=pr?.items?.[0]?.service?.domain;
+     const topScore=pr?.items?.[0]?.score||0;
+     const strongReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','natural_title_inquiry','protected_alias','department_general','exact_situation','p0_resolver','exact_route_alias','canonical_route_alias','exact','composite_early','context_priority','directory_context','organization_typo','typo_strong','typo_phrase','credit_broad']);
+     const independentlyStrong=pr?.status==='answer'&&(pr.items||[]).length&&(strongReasons.has(pr.reason)||topScore>=1200);
+     if(!independentlyStrong&&(pr?.status!=='answer'||!(pr.items||[]).length||topDomain!==sharedDomain)){
+       const anchor=DOMAIN_ANCHOR[sharedDomain];
+       if(anchor){const contextual=searchCampusServices(anchor+' '+part,true);if(contextual.status==='answer'&&(contextual.items||[]).length&&contextual.items[0].service.domain===sharedDomain)pr=contextual;}
+     }
+   }
+   if(pr?.status!=='answer'||!(pr.items||[]).length)continue;
+   const partItems=(pr.reason==='multi_intent'?(pr.items||[]).slice(0,5):[pr.items[0]]).filter(it=>it?.service&&!clauseNegatesService(part,it.service));
+   if(!partItems.length)continue;resolvedPartCount++;
+   if(!sharedDomain&&partItems[0]?.service)sharedDomain=partItems[0].service.domain;
+   for(const it of partItems){if(it?.service&&!seen.has(it.service.id)){seen.add(it.service.id);collected.push(it);}}
+ }
+ if(resolvedPartCount>=2&&collected.length>=2){const total=collected.length;return {status:'answer',items:collected.slice(0,5),reason:'multi_intent',broad:true,total_intents:total,truncated_count:Math.max(0,total-5),multi_source:'app_clause_first'};}
+ return null;
+}
+function implicitConnectorCandidates(raw){
+ const text=String(raw||'');const out=[];const seen=new Set();
+ // Candidate Korean connective endings. They are *not* trusted by themselves: every split
+ // must independently resolve to distinct campus services before it is accepted.
+ const re=/(했었고|했고|했는데|됐고|됐는데|있고|있는데|없고|없는데|렸고|렸는데|냈고|났고|났는데|되고|되었고|싶고|궁금하고|필요하고|알고싶고|알고\s*싶고|하고|지만|면서|며)(?=\s*[^\s,.!?;])/g;
+ let m;while((m=re.exec(text))){
+   const cut=m.index+m[0].length;
+   if(cut<2||cut>=text.length-1||seen.has(cut))continue;
+   seen.add(cut);out.push(cut);
+ }
+ return out;
+}
+function resolveImplicitMultiChain(raw,depth=0){
+ if(depth>=4)return null;
+ const text=String(raw||'').trim();if(normalizeQuery(text).length<4)return null;
+ const explicit=splitMultiIntent(text);
+ if(explicit.length>=2){const ready=collectResolvedMultiParts(explicit);if(ready)return ready;}
+ for(const cut of implicitConnectorCandidates(text)){
+   const left=canonicalizeMultiClauseEnding(text.slice(0,cut).trim()),right=text.slice(cut).trim();
+   if(!left||!right)continue;
+   const lr=searchCampusServices(left,true);
+   if(lr?.status!=='answer'||!(lr.items||[]).length)continue;
+   const leftItems=lr.reason==='multi_intent'?(lr.items||[]).slice(0,5):[lr.items[0]];
+   const rrMulti=resolveImplicitMultiChain(right,depth+1);
+   let rightItems=[];
+   if(rrMulti?.status==='answer'&&(rrMulti.items||[]).length)rightItems=rrMulti.items;
+   else{
+     const rr=searchCampusServices(right,true);
+     if(rr?.status==='answer'&&(rr.items||[]).length)rightItems=rr.reason==='multi_intent'?(rr.items||[]).slice(0,5):[rr.items[0]];
+   }
+   if(!rightItems.length)continue;
+   const merged=[],ids=new Set();
+   for(const it of [...leftItems,...rightItems]){if(it?.service&&!ids.has(it.service.id)){ids.add(it.service.id);merged.push(it);}}
+   if(merged.length>=2){const total=merged.length;return {status:'answer',items:merged.slice(0,5),reason:'multi_intent',broad:true,total_intents:total,truncated_count:Math.max(0,total-5),multi_source:'validated_implicit_connector'};}
+ }
+ return null;
+}
+
+// v6.8 root multi-intent resolver -------------------------------------------------
+// Do not depend on a finite list of Korean conjunctions. Build a compact lexical
+// anchor index from the 411-service catalog, find independent service concepts in
+// the whole query, then resolve each concept in its local context. Existing clause
+// splitting and implicit-connective logic remain as independent detectors; the
+// caller chooses the detector with the broadest *validated* intent coverage.
+const CATALOG_MULTI_STOP=new Set([
+ '문의','신청','지원','안내','확인','처리','관리','이용','업무','담당','부서','가능','여부','방법','시기','기간','학생','학교','대학','순천대','순천대학교','국립순천대학교','서비스','관련','필요','발급','상담','운영','교육','프로그램','제도','정보','등록','사용','예약','접수','변경','취소','재발급','증명','대상','학기','공식','언제','어디서','어디','싶어','싶어요','궁금해','궁금해요','해야해','해야돼','알려줘','알려주세요','하고','받고','가고','알고','싶고','원하고','하려고','려고','신청전','신청후','처리전','처리후','하는데','했는데','있는데','없는데','어떻게돼','어떻게','해도돼','때문에','위해서','관련해서','대해서','관해서','그리고','또한','같이','함께','먼저','나서'
+]);
+const CATALOG_BASE_CONCEPTS=[
+ ['course_registration',/(수강신청(?!(내역|확인서|취소|철회|변경|정정)))/g],
+ ['leave_general',/(휴학(?!(증명|기간|연장|중|하면|했다가|후\s*복학)))/g],
+ ['return',/(복학(?=(?:도|은|는|이|가|을|를|랑|과|와|하고|하려|신청|[,.!?;]|\s|$)))/g],
+ ['sch_national',/(국가장학금|국장(?!근))/g],
+ ['student_loan',/(학자금대출|등록금\s*대출|등록금.*빌리)/g],
+ ['student_id_reissue',/((학생증|신분증).{0,12}(재발급|잃어버|분실))/g],
+ ['major_transfer',/(전과(?=(?:도|은|는|이|가|을|를|랑|과|와|하고|하려|신청|부터|까지|만|이나|라도|조차|마저|[,.!?;]|\s|$)))/g],
+ ['office365',/(microsoft\s*365|ms365|office\s*365|오피스365)/ig],
+ ['student_email',/((학교|학생)\s*이메일.{0,12}(만들|필요|생성))/g],
+ ['dorm_facility_report_board',/((기숙사|생활관).{0,15}(에어컨|전기|온수|난방).{0,10}(고장|안돼|문제))/g]
+];
+let CATALOG_MULTI_CACHE=null;
+function isCatalogGrammarToken(term){
+ term=normalizeQuery(term);
+ return /(?:는데|했어|됐어|났어|렸어|해야해|해야돼|해야|할래|싶어|궁금해|필요해|어떻게|어떻게해|되나요|돼요|해요|하려고|려고|하는데|있는데|없는데|할수있어|할수있나요|해도돼|해도되나요)$/.test(term)||/(?:해|돼|있어|없어)$/.test(term)&&term.length<=6;
+}
+function getCatalogMultiAnchors(){
+ if(CATALOG_MULTI_CACHE&&CATALOG_MULTI_CACHE.count===services.length)return CATALOG_MULTI_CACHE.anchors;
+ const termOwners=new Map();
+ const add=(term,s,w)=>{
+   term=normalizeQuery(term);if(!term||term.length<3||CATALOG_MULTI_STOP.has(term))return;
+   let owners=termOwners.get(term);if(!owners){owners=new Map();termOwners.set(term,owners);}
+   owners.set(s.id,Math.max(owners.get(s.id)||0,w));
+ };
+ for(const s of services){
+   const specs=[['title',s.title,5],...(s.aliases||[]).map(x=>['alias',x,5]),...(s.route_keywords||[]).map(x=>['route',x,4]),...(s.situations||[]).map(x=>['situation',x,3])];
+   for(const [sourceKind,src,w] of specs){
+     if(!src)continue;
+     const words=String(src).normalize('NFKC').toLowerCase().split(/[^0-9a-z가-힣]+/).filter(Boolean);
+     for(const word of words){const nw=normalizeQuery(word);if(sourceKind!=='situation'||!isCatalogGrammarToken(nw))add(word,s,w);}
+     // Build phrase anchors from concrete workflow entries only. Situation phrases
+     // must contain noun-like material; pure grammatical endings are never anchors.
+     if(s.kind==='workflow'){
+       for(let i=0;i+1<words.length;i++){
+         const a=normalizeQuery(words[i]),b=normalizeQuery(words[i+1]);
+         if(CATALOG_MULTI_STOP.has(a)&&CATALOG_MULTI_STOP.has(b))continue;
+         if(sourceKind==='situation'&&isCatalogGrammarToken(a)&&isCatalogGrammarToken(b))continue;
+         add(words[i]+words[i+1],s,w+1);
+       }
+     }
+   }
+ }
+ const anchors=[...termOwners]
+   .filter(([term,owners])=>owners.size<=12)
+   .map(([term,owners])=>({term,owners:[...owners].map(([id,w])=>({id,w}))}))
+   .sort((a,b)=>b.term.length-a.term.length||a.term.localeCompare(b.term));
+ CATALOG_MULTI_CACHE={count:services.length,anchors};return anchors;
+}
+function normalizedQueryWithMap(raw){
+ let normalized='',map=[];raw=String(raw||'');
+ for(let i=0;i<raw.length;i++){
+   for(const ch of raw[i].normalize('NFKC').toLowerCase()){
+     if(/[0-9a-z가-힣]/.test(ch)){normalized+=ch;map.push(i);}
+   }
+ }
+ return {normalized,map};
+}
+function serviceCatalogLexicon(service){
+ return [service?.title,...(service?.aliases||[]),...(service?.route_keywords||[]),...(service?.situations||[])]
+   .filter(Boolean).map(normalizeQuery).filter(Boolean);
+}
+function catalogLocalBounds(raw,clusters,index){
+ const current=clusters[index];let left=index===0?0:clusters[index-1].re,right=index===clusters.length-1?raw.length:clusters[index+1].rs;
+ if(index>0){const gap=raw.slice(clusters[index-1].re,current.rs);let last=-1;for(let i=0;i<gap.length;i++)if(/[.!?;,\n]/.test(gap[i]))last=i;if(last>=0)left=clusters[index-1].re+last+1;}
+ if(index<clusters.length-1){const gap=raw.slice(current.re,clusters[index+1].rs);const m=gap.search(/[.!?;,\n]/);if(m>=0)right=current.re+m;}
+ // Keep enough local context for qualifiers/actions without letting filler from a
+ // previous intent dominate the resolver (e.g. “둘 다 궁금하고 ROTC 신청…”).
+ left=Math.max(left,Math.max(0,current.rs-6));
+ right=Math.min(right,Math.min(raw.length,current.re+18));
+ return {left,right};
+}
+function collectCatalogWholeIntents(raw){
+ raw=String(raw||'').trim();if(normalizeQuery(raw).length<4)return null;
+ const {normalized:n,map}=normalizedQueryWithMap(raw);if(!n)return null;
+ const hits=[];
+ // Stable base concepts cover short Korean nouns (휴학/복학/전과) that are unsafe
+ // to infer from arbitrary 2-character catalog n-grams.
+ for(const [id,re] of CATALOG_BASE_CONCEPTS){
+   re.lastIndex=0;let m;
+   while((m=re.exec(raw))){
+     const ns=normalizeQuery(raw.slice(0,m.index)).length,term=normalizeQuery(m[0]);
+     if(term)hits.push({ns,ne:ns+term.length,term,owners:[{id,w:20}],fixed:true,score:1000+term.length});
+     if(!re.global)break;
+   }
+ }
+ // Data-driven anchors: at one text position, longest catalog phrases are most
+ // informative. This is independent of commas, spaces, “하고”, “는데”, etc.
+ const byStart=new Map();
+ for(const a of getCatalogMultiAnchors()){
+   let pos=n.indexOf(a.term);
+   while(pos>=0){let arr=byStart.get(pos);if(!arr){arr=[];byStart.set(pos,arr);}arr.push(a);pos=n.indexOf(a.term,pos+1);}
+ }
+ for(const [pos,arr] of byStart){
+   const maxLen=Math.max(...arr.map(a=>a.term.length));
+   for(const a of arr.filter(a=>a.term.length===maxLen)){
+     const maxW=Math.max(...a.owners.map(o=>o.w));
+     hits.push({ns:pos,ne:pos+a.term.length,term:a.term,owners:a.owners,fixed:false,score:a.term.length*10+maxW*3-a.owners.length});
+   }
+ }
+ if(!hits.length)return null;
+ hits.sort((a,b)=>a.ns-b.ns||b.ne-a.ne||b.score-a.score);
+ const clusters=[];
+ for(const h of hits){
+   let c=clusters[clusters.length-1];
+   // Merge only true overlap. Adjacent concepts (“휴학성적정정”) must remain two.
+   if(c&&h.ns<c.ne){c.ne=Math.max(c.ne,h.ne);c.hits.push(h);for(const o of h.owners)c.owners.set(o.id,Math.max(c.owners.get(o.id)||0,o.w));}
+   else clusters.push({ns:h.ns,ne:h.ne,hits:[h],owners:new Map(h.owners.map(o=>[o.id,o.w]))});
+ }
+ for(const c of clusters){c.rs=c.ns<map.length?map[c.ns]:0;c.re=c.ne>0&&c.ne-1<map.length?map[c.ne-1]+1:raw.length;}
+ const resolved=[];
+ const wholeP0=globalThis.EodigaSearchCore?.resolve?.(raw,services);
+ for(let i=0;i<clusters.length;i++){
+   const c=clusters[i],bounds=catalogLocalBounds(raw,clusters,i),left=bounds.left,right=bounds.right;
+   const fragment=raw.slice(left,right).trim();if(!fragment)continue;
+   const route=searchCampusServices(fragment,true);let id=null;
+   const fixed=c.hits.find(h=>h.fixed);
+   // A generic base concept such as "휴학" must not erase a longer catalog concept that
+   // contains it, e.g. "병역휴학". Use the generic fixed owner only when no more-specific
+   // overlapping catalog anchor spans that base concept. This keeps ordinary 휴학 stable
+   // while allowing specific workflow titles/aliases to win without sentence-specific patches.
+   const hasSpecificOverlap=Boolean(fixed&&c.hits.some(h=>!h.fixed&&h.term.length>fixed.term.length&&h.ns<=fixed.ns&&h.ne>=fixed.ne));
+   // In an independent enumeration, an explicit base concept (휴학/복학/전과/수강신청…)
+   // is stronger than a cross-intent relationship card inferred from neighboring words,
+   // unless a more-specific catalog concept already covers the same text span.
+   if(fixed&&!hasSpecificOverlap&&(!hasStrongAtomicRelationshipSyntax(raw)||clusters.length>=3))id=fixed.owners[0].id;
+   const workflows=[...c.owners].map(([id,w])=>({id,w,service:services.find(x=>x.id===id)}))
+     .filter(x=>x.service?.kind==='workflow').sort((a,b)=>b.w-a.w||a.id.localeCompare(b.id));
+   const representative=c.hits.slice().sort((a,b)=>b.score-a.score)[0]?.term||'';
+   const exactTitleWorkflow=workflows.find(x=>normalizeQuery(x.service.title)===representative);
+   const strongLocalReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','natural_title_question','natural_title_inquiry','exact','exact_situation','p0_resolver','context_priority','composite_early','specific']);
+   // Resolve several anchor-forward prefixes and keep the strongest *catalog-owner*
+   // interpretation. This prevents words belonging to the next intent from flipping a
+   // concrete sub-service (e.g. "ROTC 신청 ... 학교 인터넷"), without enumerating
+   // Korean conjunctions. Candidate cut points come only from text boundaries.
+   const focusCandidates=[];
+   const addFocus=(text,r)=>{if(!text||!r||r.status!=='answer'||!r.items?.length)return;for(const it of r.items){if(it?.service?.kind==='workflow'&&c.owners.has(it.service.id)){const reasonBonus=strongLocalReasons.has(r.reason)?2000:0;focusCandidates.push({id:it.service.id,value:(it.score||0)+reasonBonus,reason:r.reason,text});break;}}};
+   addFocus(fragment,route);
+   const endPoints=new Set([right]);
+   for(let k=Math.max(c.re,c.rs+1);k<right;k++){if(/[\s.!?;,]/.test(raw[k]))endPoints.add(k);}
+   for(const end of [...endPoints].sort((a,b)=>a-b)){
+     const text=raw.slice(c.rs,end).trim();if(!text||text===fragment)continue;
+     addFocus(text,searchCampusServices(text,true));
+   }
+   focusCandidates.sort((a,b)=>b.value-a.value||a.text.length-b.text.length);
+   if(!id&&focusCandidates.length&&focusCandidates[0].value>=8000)id=focusCandidates[0].id;
+   if(!id&&route?.status==='answer'&&route.items?.length){
+     // Prefer a concrete workflow among locally-ranked catalog owners. Broad
+     // department routes must not steal an exact workflow such as 등록금 납부.
+     const ownerWorkflow=route.items.find(it=>it?.service?.kind==='workflow'&&c.owners.has(it.service.id));
+     if(ownerWorkflow&&strongLocalReasons.has(route.reason))id=ownerWorkflow.service.id;
+     else if(exactTitleWorkflow)id=exactTitleWorkflow.id;
+     else if(ownerWorkflow)id=ownerWorkflow.service.id;
+     else{const top=route.items[0].service,lex=serviceCatalogLexicon(top);if(c.owners.has(top.id)||c.hits.some(h=>lex.some(x=>x.includes(h.term))))id=top.id;}
+   }
+   if(!id&&fixed&&!hasSpecificOverlap)id=fixed.owners[0].id;
+   if(!id&&exactTitleWorkflow)id=exactTitleWorkflow.id;
+   // Whole-query P0 is only a last-resort disambiguator after the local fragment
+   // and the explicit catalog concept have both abstained.
+   if(!id&&wholeP0?.status==='answer'&&wholeP0.items?.length===1){
+     const ps=wholeP0.items[0].service,plex=serviceCatalogLexicon(ps);
+     if(c.owners.has(ps.id)&&c.hits.some(h=>plex.some(x=>x.includes(h.term))))id=ps.id;
+   }
+   if(!id&&workflows.length===1)id=workflows[0].id;
+   const service=id?services.find(x=>x.id===id):null;
+   if(service&&!clauseNegatesService(fragment,service))resolved.push({id,service,cluster:c});
+ }
+ const unique=[];for(const x of resolved){if(!unique.some(y=>y.id===x.id))unique.push(x);}
+ if(unique.length<2)return null;
+ // Relationship protection, derived from the catalog rather than connector words:
+ // if a concrete workflow entry itself contains representative anchors from two
+ // detected concepts and whole-query ranking supports it, keep that one workflow.
+ const whole=searchCampusServices(raw,true),ranked=new Map((whole?.items||[]).map((it,i)=>[it.service.id,{rank:i,score:it.score||0}]));
+ const p0=globalThis.EodigaSearchCore?.resolve?.(raw,services);
+ const reps=unique.map(u=>u.cluster.hits.slice().sort((a,b)=>b.score-a.score)[0]?.term).filter(Boolean);
+ let atomic=null;
+ for(const s of services){
+   if(s.kind!=='workflow')continue;
+   let coverage=0;
+   for(const entry of serviceCatalogLexicon(s))coverage=Math.max(coverage,reps.filter(t=>t&&entry.includes(t)).length);
+   if(coverage<2)continue;
+   const rr=ranked.get(s.id),isP0=p0?.items?.[0]?.service?.id===s.id;if(!rr&&!isP0)continue;
+   const value=coverage*1000+(isP0?600:0)+(rr?400-rr.rank*40:0);
+   if(!atomic||value>atomic.value)atomic={service:s,value};
+ }
+ if(unique.length===2&&atomic&&hasStrongAtomicRelationshipSyntax(raw))return null;
+ const items=unique.map((x,i)=>({service:x.service,score:8800-i}));
+ return {status:'answer',items:items.slice(0,5),reason:'multi_intent',broad:true,total_intents:items.length,truncated_count:Math.max(0,items.length-5),multi_source:'catalog_whole_query'};
+}
+function pickBestValidatedMulti(candidates){
+ const valid=candidates.filter(Boolean).filter(r=>r.status==='answer'&&r.reason==='multi_intent'&&(r.items||[]).length>=2);
+ if(!valid.length)return null;
+ const priority={catalog_whole_query:3,app_clause_first:2,validated_implicit_connector:1};
+ const workflowCount=r=>(r.items||[]).filter(it=>it?.service?.kind==='workflow').length;
+ valid.sort((a,b)=>(Number(b.total_intents)||b.items?.length||0)-(Number(a.total_intents)||a.items?.length||0)||(b.items?.length||0)-(a.items?.length||0)||workflowCount(b)-workflowCount(a)||((priority[b.multi_source]||0)-(priority[a.multi_source]||0)));
+ return valid[0];
+}
+// -------------------------------------------------------------------------------
+
+function searchCampusServicesRaw(query,metaGuard=false){
  const q=String(query||'').trim().slice(0,300),n=normalizeQuery(q),qLoose=loosenQuery(q),nLoose=normalizeQuery(qLoose);if(!n)return {status:'unknown',items:[]};
+ const p0=globalThis.EodigaSearchCore?.resolve?.(q,services);
+ // An exact canonical service identity (including documented wrappers/facets) outranks
+ // punctuation-based multi splitting. Official titles can legitimately contain '/', '&', '·'.
+ const exactIdentityReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','natural_title_question','exact_situation','exact_route_alias']);
+ // Do not return an exact-looking whole-query identity yet when the user used a comma/semicolon.
+ // First verify whether each separated chunk is itself an exact catalog service. This preserves
+ // explicit multi-service enumerations even when a broader route title happens to resemble the whole string.
+ // Safety/out-of-scope guards remain absolute. Relationship workflows are delayed
+ // until after multi-intent discovery so a broad atomic rule cannot swallow a real
+ // enumeration such as “휴학도 해야 하고 졸업증명서도 필요해”.
+ if(p0&&shouldAlwaysKeepCoreSafety(p0))return p0;
+ // If comma/semicolon-separated chunks are themselves exact official service titles,
+ // preserve those service identities before any inner punctuation/anchor decomposition.
+ // This prevents official titles containing '·', '/', '&' from being exploded into sub-intents.
+ if(!metaGuard&&/[,;]/.test(q)){
+   const segs=q.split(/[,;]+/).map(x=>x.trim()).filter(Boolean);
+   if(segs.length>=2){
+     const exactSegItems=[];let allExact=true;
+     for(const seg of segs){
+       const sn=normalizeQuery(seg),sl=normalizeQuery(loosenQuery(seg));
+       const segCore=globalThis.EodigaSearchCore?.resolve?.(seg,services);
+       if(segCore&&exactIdentityReasons.has(segCore.reason)&&(segCore.items||[]).length>=1){
+         exactSegItems.push({service:segCore.items[0].service,score:9900-exactSegItems.length});continue;
+       }
+       let hits=SEARCH_INDEX.filter(e=>e.title===sn);
+       if(!hits.length&&sl&&sl!==sn)hits=SEARCH_INDEX.filter(e=>e.title===sl);
+       if(!hits.length){allExact=false;break;}
+       const priority={workflow:0,academic_directory_general:1,academic_directory:2,department_route:3,official_route:4,organization_registry:5};
+       hits.sort((a,b)=>(priority[a.service.kind]??9)-(priority[b.service.kind]??9));
+       exactSegItems.push({service:hits[0].service,score:9900-exactSegItems.length});
+     }
+     if(allExact){
+       const uniq=[];const seen=new Set();for(const it of exactSegItems){if(!seen.has(it.service.id)){seen.add(it.service.id);uniq.push(it);}}
+       if(uniq.length>=2)return {status:'answer',items:uniq.slice(0,5),reason:'multi_intent',broad:true,total_intents:uniq.length,truncated_count:Math.max(0,uniq.length-5),multi_source:'explicit_exact_titles'};
+     }
+   }
+ }
+ if(p0&&exactIdentityReasons.has(p0.reason))return p0;
+ if(!metaGuard){
+   const clauseFirst=collectResolvedMultiParts(splitMultiIntent(q));
+   const catalogMulti=collectCatalogWholeIntents(q);
+   const implicitMulti=resolveImplicitMultiChain(q);
+   const bestMulti=pickBestValidatedMulti([clauseFirst,catalogMulti,implicitMulti]);
+   // A natural routing question anchored by a complete canonical title should survive
+   // spurious catalog decomposition when the proposed multi result does not even contain
+   // that canonical intent and there is no evidence the user enumerated another request.
+   // Compare intent groups (canonical_id) rather than raw IDs so route/workflow twins count
+   // as the same administrative intent. Genuine enumerations still proceed to multi output.
+   if(bestMulti&&p0?.reason==='natural_title_inquiry'&&(p0.items||[]).length>=1){
+     const anchoredItems=(p0.items||[]).filter(it=>it?.service),anchoredGroups=new Set(anchoredItems.map(it=>serviceIntentGroup(it.service)).filter(Boolean));
+     const multiGroups=new Set((bestMulti.items||[]).map(it=>serviceIntentGroup(it?.service)).filter(Boolean));
+     // A valid expansion of a title-anchored inquiry must retain at least one anchored intent.
+     if(anchoredGroups.size&&![...anchoredGroups].some(g=>multiGroups.has(g)))return p0;
+     // Require distinctive evidence for every *new* intent in the text AFTER the complete
+     // canonical title.  This prevents words that belong to a compound official title
+     // (TOPIK·외국어강좌·모의토익, R&D, A&B...) or generic routing words (문의/어디/담당...)
+     // from becoming fake extra requests. Genuine continuations such as "... ROTC도 궁금해"
+     // still expand because ROTC itself is a catalog anchor in the suffix.
+     const anchorService=anchoredItems.slice().sort((a,b)=>normalizeQuery(b.service.title).length-normalizeQuery(a.service.title).length)[0]?.service;
+     const qmap=normalizedQueryWithMap(q),tn=normalizeQuery(anchorService?.title||'');
+     let suffixNorm='';
+     if(tn&&qmap.normalized.startsWith(tn)&&qmap.map[tn.length-1]!=null)suffixNorm=normalizeQuery(q.slice(qmap.map[tn.length-1]+1));
+     const extraGroups=[...multiGroups].filter(g=>!anchoredGroups.has(g));
+     const genericAnchor=/문의|물어|연락|전화|담당|부서|어디|누구|알려|궁금|가야|찾아가|방문|상담|확인/;
+     const anchors=getCatalogMultiAnchors();
+     const hasSuffixEvidence=extraGroups.length>0&&extraGroups.every(group=>anchors.some(a=>{
+       if(!suffixNorm.includes(a.term)||CATALOG_MULTI_STOP.has(a.term)||isCatalogGrammarToken(a.term)||genericAnchor.test(a.term))return false;
+       return a.owners.some(o=>serviceIntentGroup(services.find(s=>s.id===o.id))===group);
+     }));
+     if(!hasSuffixEvidence)return p0;
+   }
+   if(bestMulti&&p0?.status==='answer'&&(p0.items||[]).length===1&&(Number(bestMulti.total_intents)||bestMulti.items?.length||0)===2){
+     const pid=p0.items?.[0]?.service?.id,mids=new Set((bestMulti.items||[]).map(it=>it?.service?.id).filter(Boolean));
+     const enumerationEvidence=hasExplicitEnumerationSyntax(q)||bestMulti.multi_source==='app_clause_first'||(bestMulti.multi_source==='validated_implicit_connector'&&!hasStrongAtomicRelationshipSyntax(q));
+     // For ordinary queries, let a validated 2-intent result beat a broad atomic workflow
+     // unless the wording itself is strongly relational. Natural routing questions are already
+     // protected by the dedicated natural_title_inquiry guard above.
+     const atomicNonRelational=shouldKeepAtomicCoreResult(p0)&&!hasStrongAtomicRelationshipSyntax(q);
+     if(pid&&!mids.has(pid)&&!enumerationEvidence&&!atomicNonRelational)return p0;
+   }
+   if(bestMulti&&((Number(bestMulti.total_intents)||bestMulti.items?.length||0)>=3||(!(p0&&shouldKeepAtomicCoreResult(p0))||!hasStrongAtomicRelationshipSyntax(q))))return bestMulti;
+ }
+ if(p0&&shouldKeepAtomicCoreResult(p0))return p0;
+ if(p0)return p0;
  const fillerOnly=new Set(['싶어','싶어요','하고싶어','하고싶어요','할래','할래요','해줘','해주세요','알려줘','알려주세요','문의드려요','문의드립니다']);if(fillerOnly.has(n))return {status:'unknown',items:[],reason:'filler'};
- if(isObviousNonCampus(q))return {status:'unknown',items:[],reason:'out_of_scope'};
+ const hasMultipleIntents=!metaGuard&&splitMultiIntent(q).length>=2;
+ // Whole-query out-of-scope rules can cross-contaminate separate clauses (e.g. one clause has
+ // “추천”, another has “전공”). For explicit multi-intent input, validate each clause instead.
+ if(!hasMultipleIntents&&isObviousNonCampus(q))return {status:'unknown',items:[],reason:'out_of_scope'};
  const genericInstitutionQueries=new Set(['순천대','순천대학교','국립순천대학교','순천대전화번호','순천대학교전화번호','국립순천대학교전화번호','학교전화번호']);
  if(genericInstitutionQueries.has(n))return {status:'unknown',items:[],reason:'no_signal'};
- const hasMultipleIntents=!metaGuard&&splitMultiIntent(q).length>=2;
 
  if(n==='메이커스페이스'){const s=services.find(x=>x.id==='maker');if(s)return {status:'answer',items:[{service:s,score:6200}],reason:'specific'};}
  if(!hasMultipleIntents&&(n.includes('uv프린터')||n.includes('uvprinter')||n.includes('uv인쇄'))){const s=services.find(x=>x.id==='maker_uv_printer');if(s)return {status:'answer',items:[{service:s,score:6200}],reason:'specific'};}
@@ -725,17 +1211,22 @@ function searchCampusServices(query,metaGuard=false){
  }
 
  if(!metaGuard){
-   const tail=contrastTail(q);
+   const tail=!hasMultipleIntents?contrastTail(q):null;
    if(tail&&normalizeQuery(tail)!==n){
      const tr=searchCampusServices(tail,true);if(tr.status==='answer'&&(tr.items||[]).length)return {...tr,reason:'contrast'};
-     const marker=q.match(/^(.*?)(?:말고|아니고|아니라|말고요|보다는|대신)\s*(.+)$/);
+     const marker=q.match(/^(.*?)(?:(?<!기)말고요|(?<!기)말고|아니고|아니라|보다는|대신)\s*(.+)$/);
      if(marker){const words=marker[1].trim().split(/\s+/).filter(Boolean);if(words.length>1){words.pop();const augmented=(words.join(' ')+' '+tail).trim();const ar=searchCampusServices(augmented,true);if(ar.status==='answer'&&(ar.items||[]).length)return {...ar,reason:'contrast_context'};}}
    }
    const parts=splitMultiIntent(q);
    if(parts.length>=2){
      const collected=[];const seen=new Set();
      let sharedDomain=null;
-     for(const part of parts){
+     for(const rawPart of parts){
+       // Ignore connective/filler fragments before shared-domain inheritance. Otherwise a
+       // trailing '싶어'/'궁금해요' fragment can inherit the previous domain and manufacture
+       // an unrelated third service (false addition).
+       if(fillerOnly.has(normalizeQuery(rawPart))||isGenericMultiFiller(rawPart))continue;
+       const part=trimMultiClauseWrapper(rawPart);
        let pr=searchCampusServices(part,true);
        if(sharedDomain&&(!partHasExplicitConcept(part))){
          const topDomain=pr?.items?.[0]?.service?.domain;
@@ -748,11 +1239,14 @@ function searchCampusServices(query,metaGuard=false){
          }
        }
        if(pr.status!=='answer'||!(pr.items||[]).length)continue;
-       const it=pr.items[0];
-       if(!sharedDomain)sharedDomain=it.service.domain;
-       if(!seen.has(it.service.id)){seen.add(it.service.id);collected.push(it);}
+       // A tentative clause can still contain two valid intents when “또” means either
+       // conjunction or “again”. The recursive core can resolve that nested phrase as
+       // multi_intent; preserve all of those proven items instead of silently dropping #2.
+       const partItems=pr.reason==='multi_intent'?(pr.items||[]).slice(0,5):[pr.items[0]];
+       if(!sharedDomain&&partItems[0]?.service)sharedDomain=partItems[0].service.domain;
+       for(const it of partItems){if(it?.service&&!seen.has(it.service.id)){seen.add(it.service.id);collected.push(it);}}
      }
-     if(collected.length>=2)return {status:'answer',items:collected.slice(0,7),reason:'multi_intent',broad:true};
+     if(collected.length>=2){const total=collected.length;return {status:'answer',items:collected.slice(0,5),reason:'multi_intent',broad:true,total_intents:total,truncated_count:Math.max(0,total-5)};}
    }
  }
  if(['학과','학과찾기','학과찾아줘','학과목록','학과안내','전공찾기','전공찾아줘','전공목록','전공안내'].includes(n)||['학과','학과찾기','학과찾아줘','학과목록','학과안내','전공찾기','전공찾아줘','전공목록','전공안내'].includes(nLoose)||n.startsWith('학과찾')||n.startsWith('전공찾')||n.startsWith('학과어디')||n.startsWith('전공어디')){
@@ -780,7 +1274,7 @@ function searchCampusServices(query,metaGuard=false){
  if((n.includes('통학')||n.includes('셔틀')||n==='버스')&&(n.includes('예약')||n.includes('qr')||n.includes('유니버스'))){const s=services.find(x=>x.id==='shuttle_reserve');if(s)return {status:'answer',items:[{service:s,score:4900}],reason:'context'};}
  const concept=detectConcept(q);
  if(!concept&&!hasCampusIntentSignal(q)&&splitQuery(q).length>=3)return {status:'unknown',items:[],reason:'no_signal'};
- let ranked=SEARCH_INDEX.map(e=>({service:e.service,score:Math.max(scoreSearchEntry(e,q,concept),qLoose&&qLoose!==q?scoreSearchEntry(e,qLoose,concept):0)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score);
+ let ranked=SEARCH_INDEX.map(e=>({service:e.service,score:Math.max(scoreSearchEntry(e,q,concept),qLoose&&qLoose!==q?scoreSearchEntry(e,qLoose,concept):0)})).filter(x=>x.score>0).sort((a,b)=>b.score-a.score||a.service.id.localeCompare(b.service.id));
  const genericPreferredId=GENERIC_BROAD_PREFERRED[n]||GENERIC_BROAD_PREFERRED[nLoose];
  if(genericPreferredId){
    const idx=ranked.findIndex(x=>x.service.id===genericPreferredId);
@@ -810,11 +1304,109 @@ function searchCampusServices(query,metaGuard=false){
  return {status:'unknown',items:[]};
 }
 
+
+function dedupeRouteIntentItems(route){
+  if(!route||route.status!=='answer'||!Array.isArray(route.items)||route.items.length<2)return route;
+  const out=[],keyToIndex=new Map();
+  const routeKinds=new Set(['official_route','department_route']);
+  const identityKey=service=>{
+    const canonical=service?.canonical_id||service?.intent_group;
+    if(canonical)return `canonical:${canonical}`;
+    if(routeKinds.has(service?.kind)){
+      const title=normalizeQuery(service?.title||''),dept=normalizeQuery(service?.department?.name||'');
+      if(title&&dept)return `route:${title}|${dept}`;
+    }
+    return `id:${service?.id||''}`;
+  };
+  const representativePriority=service=>{
+    const canonical=service?.canonical_id||service?.intent_group;
+    if(canonical&&service?.id===canonical)return 0;
+    if(service?.kind==='workflow')return 1;
+    if(service?.kind==='official_route')return 2;
+    if(service?.kind==='department_route')return 3;
+    return 4;
+  };
+  for(const item of route.items){
+    const service=item?.service;if(!service)continue;
+    const key=identityKey(service);
+    if(!keyToIndex.has(key)){keyToIndex.set(key,out.length);out.push(item);continue;}
+    const idx=keyToIndex.get(key),prev=out[idx];
+    if(representativePriority(service)<representativePriority(prev?.service))out[idx]={...item,score:prev?.score??item.score};
+  }
+  if(out.length===route.items.length)return route;
+  const removed=route.items.length-out.length;
+  const total=Number.isFinite(Number(route.total_intents))?Math.max(out.length,Number(route.total_intents)-removed):route.total_intents;
+  const next={...route,items:out};
+  if(total!=null&&!Number.isNaN(Number(total))){next.total_intents=Number(total);next.truncated_count=Math.max(0,Number(total)-out.length);}
+  return next;
+}
+function searchCampusServices(query,metaGuard=false){
+  return dedupeRouteIntentItems(searchCampusServicesRaw(query,metaGuard));
+}
+
+
+function classifyRouteConfidence(route,query=''){
+  if(!route||route.status!=='answer'||!(route.items||[]).length)return 'low';
+  const highReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','natural_title_inquiry','protected_alias','department_general','exact_situation','p0_resolver','exact_route_alias','canonical_route_alias','specific','exact','context_priority','composite_early','directory_context','multi_intent']);
+  const mediumReasons=new Set(['semantic','broad','direct','typo','typo_strong','typo_phrase','official_entity','organization_typo','academic_directory','academic_directory_intent','academic_directory_explicit','academic_directory_named','credit_broad','academic_directory_broad']);
+  if(highReasons.has(route.reason))return 'high';
+  if(mediumReasons.has(route.reason))return 'medium';
+  const top=route.items[0]?.score||0, second=route.items[1]?.score||0;
+  if(top>=1800 && (!second || top-second>=220))return 'high';
+  if(top>=650)return 'medium';
+  return 'low';
+}
+function serviceIntentGroup(service){return service?.canonical_id||service?.intent_group||service?.id||'';}
+function buildSearchEvidence(query,route){
+  const q=String(query||''),n=normalizeQuery(q),top=route?.items?.[0];if(!top?.service)return {query:q,matches:[],confidence:'low',margin:null};
+  const s=top.service,matches=[];
+  const fields=[['title',[s.title]],['aliases',s.aliases||[]],['situations',s.situations||[]],['route_keywords',s.route_keywords||[]],['department',[s.department?.name]],['category',[s.category]]];
+  for(const [field,vals] of fields)for(const raw of vals.filter(Boolean)){const x=normalizeQuery(raw);if(!x)continue;if(n===x||n.includes(x)||x.includes(n)){matches.push({field,value:String(raw)});if(matches.length>=8)break;}if(matches.length>=8)break;}
+  const ops=['신청','취소','변경','환불','발급','재발급','조회','확인','납부','예약','신고','문의'];
+  const queryOps=ops.filter(x=>n.includes(normalizeQuery(x)));
+  const serviceText=normalizeQuery([s.title,...(s.aliases||[]),...(s.situations||[]),...(s.route_keywords||[])].join(' '));
+  const operationCoverage=queryOps.filter(x=>serviceText.includes(normalizeQuery(x)));
+  const first=route.items[0]?.score??null,second=route.items[1]?.score??null;
+  return {query:q,service_id:s.id,matched_original_span:q,matches,operation_query:queryOps,operation_covered:operationCoverage,confidence:classifyRouteConfidence(route,q),margin:(first!=null&&second!=null)?first-second:null,reason:route.reason||null};
+}
+function classifierServices(result){
+  const ids=[...(Array.isArray(result?.service_ids)?result.service_ids:[]),result?.service_id].filter(Boolean);
+  const seen=new Set(),out=[];for(const id of ids){const s=services.find(x=>x.id===id);if(s&&!seen.has(id)){seen.add(id);out.push(s);}if(out.length>=5)break;}return out;
+}
+function mergeClassifierResult(localRoute,result,{partial=false,coverageAudit=false}={}){
+  const ai=classifierServices(result);if(!ai.length)return localRoute;
+  const local=(localRoute?.items||[]).map(x=>x.service).filter(Boolean);
+  if(coverageAudit&&result?.coverage_complete===true){
+    // In final coverage-audit mode Gemini returns the complete intended service-ID set, not just deltas.
+    // This lets it add a missed intent and replace an overly broad deterministic match while all displayed
+    // administrative facts still come only from the local verified catalog records.
+    const localTotal=Number(localRoute?.total_intents)||local.length;
+    // Gemini intentionally returns at most five displayed IDs. If the deterministic engine already
+    // proved that the user expressed more than five independent intents, preserve that count so the
+    // UI can still tell the user that additional requests were truncated instead of silently erasing it.
+    const total=localTotal>5?Math.max(localTotal,ai.length):ai.length;
+    return {status:'answer',items:ai.slice(0,5).map((service,i)=>({service,score:9500-i})),reason:ai.length>1?'multi_intent':'classifier',confidence:'high',ai_assisted:true,coverage_audited:true,total_intents:total,truncated_count:Math.max(0,total-Math.min(5,ai.length))};
+  }
+  if(partial){
+    const groups=new Set(local.map(serviceIntentGroup));const merged=[...local];
+    for(const s of ai){const g=serviceIntentGroup(s);if(groups.has(g))continue;groups.add(g);merged.push(s);if(merged.length>=5)break;}
+    return {status:'answer',items:merged.map((service,i)=>({service,score:9000-i})),reason:merged.length>1?'multi_intent':'classifier',confidence:'high',ai_assisted:true};
+  }
+  // For a non-high local result, a high-confidence classifier result replaces rather than blindly unions
+  // broad/conflicting candidates. Administrative facts still come only from these local service records.
+  return {status:'answer',items:ai.slice(0,5).map((service,i)=>({service,score:9000-i})),reason:ai.length>1?'multi_intent':'classifier',confidence:'high',ai_assisted:true};
+}
+function renderAiClarification(result){
+  const host=$('#resultSummary');if(!host)return;const box=document.createElement('section');box.className='unresolved-notice ai-clarification';
+  const b=document.createElement('b');b.textContent='정확한 업무를 확정하기 어려워요.';const p=document.createElement('p');p.textContent='대상·장소·하려는 일을 조금 더 구체적으로 입력해주세요.';box.append(b,p);host.appendChild(box);
+}
+
 function displayMethod(service){
   const m = service.method || {};
   let detail = [];
   if(m.online === true) detail.push('온라인 가능');
-  if(m.visit === true) detail.push('방문 가능/필요');
+  if(m.visit_required === true) detail.push('방문 필요');
+  else if(m.visit === true) detail.push('방문 가능');
   if(m.online === false) detail.push('온라인 불가');
   return {primary:m.primary || '공식 안내 확인', detail:detail.join(' · ')};
 }
@@ -828,11 +1420,15 @@ function safeUrl(url){
 
 function setLoading(on){
   $('#searchBtn')?.classList.toggle('loading', on);
-  if($('#searchBtn')) $('#searchBtn').textContent = on ? '찾는 중…' : '어디가?';
+  if($('#searchBtn')) { $('#searchBtn').textContent = on ? '찾는 중…' : '어디가?'; $('#searchBtn').disabled=Boolean(on); }
 }
 
-async function classifyUncertainQuery(query){
+async function classifyUncertainQuery(query, context={}){
   if(location.protocol === 'file:') return {mode:'unavailable',reason:'local_file'};
+  const masked=maskPersonalInfo(query);
+  const assistMode=context.assist_mode==='missing_only'?'missing_only':'full';
+  const cacheKey=JSON.stringify([masked,assistMode,context.matched_service_ids||[],context.unresolved_clauses||[]]);
+  if(classifierCache.has(cacheKey)) return classifierCache.get(cacheKey);
   if(pendingClassifierController) pendingClassifierController.abort();
   const controller=new AbortController();
   pendingClassifierController=controller;
@@ -841,11 +1437,11 @@ async function classifyUncertainQuery(query){
     const res = await fetch('/api/classify', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({query}),
+      body:JSON.stringify({query:masked,assist_mode:assistMode,matched_service_ids:(context.matched_service_ids||[]).slice(0,5),unresolved_clauses:(context.unresolved_clauses||[]).map(maskPersonalInfo).slice(0,5)}),
       signal:controller.signal
     });
     if(!res.ok) return {mode:'unavailable'};
-    return await res.json();
+    const value=await res.json();classifierCache.set(cacheKey,value);if(classifierCache.size>30)classifierCache.delete(classifierCache.keys().next().value);return value;
   }catch(e){
     return {mode:'unavailable',reason:e?.name==='AbortError'?'timeout':'error'};
   }finally{
@@ -884,7 +1480,7 @@ function safeStorageWrite(key, value){
 
 function addRecentSearch(query){
   const q=String(query||'').trim().slice(0,300);
-  if(!q) return;
+  if(!q || containsPersonalInfo(q)) return;
   const prior=safeStorageRead(RECENT_SEARCH_KEY,[]).filter(x=>typeof x==='string'&&x.trim()&&x!==q);
   safeStorageWrite(RECENT_SEARCH_KEY,[q,...prior].slice(0,3));
   renderRecentSearches();
@@ -924,6 +1520,11 @@ function setChecked(key, checked){
   safeStorageWrite(CHECK_STATE_KEY,state);
 }
 
+function resetAllCheckState(){
+  safeStorageWrite(CHECK_STATE_KEY,{});
+  document.querySelectorAll('.item-check').forEach(btn=>{btn.setAttribute('aria-pressed','false');btn.textContent='○';btn.closest('li, .document-check-wrap')?.classList.remove('done');});
+}
+
 function makeCheckButton(key,label,kind='step'){
   const btn=document.createElement('button');
   btn.type='button';btn.className=`item-check ${kind}-check`;
@@ -940,56 +1541,34 @@ function makeCheckButton(key,label,kind='step'){
 }
 
 function uniqueValues(values){return [...new Set(values.map(x=>String(x||'').trim()).filter(Boolean))];}
+function stableKeyPart(text=''){let h=2166136261;for(const ch of String(text)){h^=ch.codePointAt(0);h=Math.imul(h,16777619);}return (h>>>0).toString(36);}
+function queryFacet(query=''){const q=String(query);return {phone:/전화|연락처/.test(q),location:/어디|위치|찾아가/.test(q),documents:/준비물|서류|뭐.{0,3}(필요|가져|내)/.test(q),period:/기간|언제|마감|신청일|몇\s*월|몇\s*일까지/.test(q),amount:/금액|얼마|수수료|비용|수강료|환불/.test(q),eligibility:/자격|조건|대상|가능(?:해|한|한가|한지|여부)/.test(q),schedule:/몇\s*시|시간|식사시간|아침|점심|저녁/.test(q),operations:/온수|냉방|난방|냉·난방|냉난방/.test(q)};}
+function splitExplicitClauses(query=''){return splitMultiIntent(query).map(x=>x.trim()).filter(x=>x.length>=2);}
+function meaningfulUnknown(route,clause){return route?.status==='unknown' && ['unsupported_item','ambiguous_location','ambiguous_term','unresolved_relation','not_found','no_signal'].includes(route.reason);}
+function findUnresolvedClauses(query){const clauses=splitExplicitClauses(query);if(clauses.length<2)return [];const filler=new Set(['싶어','싶어요','싶음','하고싶어','하고싶어요','하고싶음','할래','할래요','해줘','해주세요','알려줘','알려주세요','문의드려요','문의드립니다']);const out=[];for(const clause of clauses){if(filler.has(normalizeQuery(clause)))continue;const r=searchCampusServices(clause,true);if(meaningfulUnknown(r,clause))out.push(clause);}return [...new Set(out)].slice(0,5);}
+
 
 function renderMultiSummary(items, query){
-  const host=$('#resultSummary');
-  if(!host)return;
-  host.innerHTML='';
+  const host=$('#resultSummary');if(!host)return;host.innerHTML='';
   const selected=items.slice(0,5).map(x=>x.service);
-  const depts=uniqueValues(selected.map(s=>s.department?.name));
-  const docs=uniqueValues(selected.flatMap(s=>s.documents||[]));
   const section=document.createElement('section');section.className='multi-summary';
   const top=document.createElement('div');top.className='multi-summary-top';
-  const title=document.createElement('div');
-  const kicker=document.createElement('span');kicker.className='summary-kicker';kicker.textContent='한 번에 확인하기';
-  const h=document.createElement('h3');h.textContent=`${selected.length}개 업무를 한 번에 정리했어요.`;
-  title.append(kicker,h);
-  top.append(title);section.appendChild(top);
-  const grid=document.createElement('div');grid.className='multi-summary-grid';
-  const groups=[
-    ['확인할 업무',selected.map(s=>s.title)],
-    ['담당부서',depts],
-    ['준비할 것',docs.length?docs:['각 업무 카드에서 준비사항을 확인하세요.']]
-  ];
-  groups.forEach(([label,vals])=>{
-    const box=document.createElement('div');box.className='summary-group';
-    const l=document.createElement('span');l.className='summary-label';l.textContent=label;box.appendChild(l);
-    const wrap=document.createElement('div');wrap.className='summary-chips';
-    vals.slice(0,6).forEach(v=>{const chip=document.createElement('span');chip.textContent=v;wrap.appendChild(chip);});
-    box.appendChild(wrap);grid.appendChild(box);
+  const title=document.createElement('div');const kicker=document.createElement('span');kicker.className='summary-kicker';kicker.textContent='한 번에 확인하기';
+  const h=document.createElement('h3');h.textContent=`${selected.length}개 업무를 한 번에 정리했어요.`;title.append(kicker,h);top.append(title);section.appendChild(top);
+  const grid=document.createElement('div');grid.className='multi-summary-grid linked-summary-grid';
+  selected.forEach(service=>{const box=document.createElement('div');box.className='summary-group linked-summary-item';
+    const l=document.createElement('span');l.className='summary-label';l.textContent=service.title;box.appendChild(l);
+    const dept=document.createElement('p');dept.className='summary-linked-line';dept.textContent=`담당: ${service.department?.name||'공식 출처 확인'}`;box.appendChild(dept);
+    const docs=document.createElement('p');docs.className='summary-linked-line';docs.textContent=(service.documents||[]).length?`준비: ${(service.documents||[]).join(' · ')}`:'준비: 업무 카드/공식 출처에서 확인';box.appendChild(docs);grid.appendChild(box);
   });
   section.appendChild(grid);host.appendChild(section);
 }
 
 function clearResultSummary(){const host=$('#resultSummary');if(host)host.innerHTML='';}
 
-const STATIC_CLARIFICATION_TARGETS = {
-  leave_general:{
-    '개인사정':'leave_general',
-    '군입대':'leave_military',
-    '질병':'leave_illness',
-    '임신·출산·육아':'leave_parental',
-    '창업':'leave_startup',
-    '대학 추천 국외수학':'leave_overseas'
-  },
-  withdrawal:{
-    '휴학':'leave_general',
-    '자퇴':'withdrawal'
-  }
-};
-
 function replaceClarifiedService(currentService, option){
-  const targetId=STATIC_CLARIFICATION_TARGETS[currentService?.id]?.[option];
+  let targetId=currentService?.clarification?.target_ids?.[option]||null;
+  if(!targetId){const r=searchCampusServices(`${currentService?.title||''} ${option}`,true);targetId=r?.status==='answer'?r.items?.[0]?.service?.id:null;}
   if(!targetId) return false;
   const targetService=services.find(s=>s.id===targetId);
   if(!targetService) return false;
@@ -1002,22 +1581,36 @@ function replaceClarifiedService(currentService, option){
   if(oldCard) oldCard.replaceWith(newNode);
   else grid.appendChild(newNode);
 
-  const box=$('#clarificationBox');
-  box.classList.add('hidden');
-  box.innerHTML='';
-
+  const box=$('#clarificationBox');box.classList.add('hidden');box.innerHTML='';
+  pendingClarificationIds=pendingClarificationIds.filter(id=>id!==currentService.id);
+  if(targetId!==currentService.id&&targetService?.clarification?.required&&!pendingClarificationIds.includes(targetService.id))pendingClarificationIds.unshift(targetService.id);
   if(grid.classList.contains('multi-result-grid')){
     const items=[...grid.querySelectorAll('.service-card')].map(card=>services.find(s=>s.id===card.dataset.serviceId)).filter(Boolean).map(service=>({service,score:999}));
     renderMultiSummary(items,activeResultQuery);
   }
-  if(currentService.id==='withdrawal' && targetId==='leave_general'){
-    renderClarificationPrompt(targetService);
-  }
+  renderNextClarification();
   return true;
 }
 
 function handleClarificationChoice(service, option){
   if(replaceClarifiedService(service,option)) return;
+}
+
+function startClarificationQueue(serviceList=[]){
+  pendingClarificationIds=[];
+  for(const s of serviceList){if(s?.clarification?.required&&!pendingClarificationIds.includes(s.id))pendingClarificationIds.push(s.id);}
+  renderNextClarification();
+}
+function renderNextClarification(){
+  const grid=$('#resultGrid');
+  while(pendingClarificationIds.length){
+    const id=pendingClarificationIds[0];
+    const present=grid?.querySelector(`.service-card[data-service-id=\"${CSS.escape(id)}\"]`);
+    const service=services.find(s=>s.id===id);
+    if(present&&service?.clarification?.required){renderClarificationPrompt(service);return;}
+    pendingClarificationIds.shift();
+  }
+  const box=$('#clarificationBox');if(box){box.classList.add('hidden');box.innerHTML='';}
 }
 
 function renderClarificationPrompt(service){
@@ -1033,6 +1626,13 @@ function renderClarificationPrompt(service){
     btn.addEventListener('click',()=>handleClarificationChoice(service,o));opt.appendChild(btn);
   });
   box.appendChild(opt);
+}
+
+function sourceFreshness(source){
+  const days=Number(dataset?.metadata?.freshness_policy?.review_days||365);
+  const raw=source?.verified_at;if(!raw)return {known:false,stale:false};
+  const d=new Date(`${raw}T00:00:00Z`);if(Number.isNaN(d.getTime()))return {known:false,stale:false};
+  const age=Math.floor((Date.now()-d.getTime())/86400000);return {known:true,stale:age>days,age_days:age};
 }
 
 function createServiceCard(item, isPrimary=false){
@@ -1051,10 +1651,13 @@ function createServiceCard(item, isPrimary=false){
   const list = (service.steps && service.steps.length) ? service.steps : ['공식 안내 페이지에서 최신 절차를 확인합니다.'];
   list.forEach((step,i)=>{
     const li = document.createElement('li');
-    const text=document.createElement('span');text.className='step-text';text.textContent=step;
+    const generic=/본인에게 해당하는 (?:신청 )?조건과 (?:필요한 서류를|제출사항을) 확인합니다\.?/.test(step);
+    const shown=generic?'공식 공지에서 신청 조건·제출사항을 확인해야 합니다.':step;
+    if(generic)li.classList.add('needs-official-check');
+    const text=document.createElement('span');text.className='step-text';text.textContent=shown;
     li.appendChild(text);
-    const key=`${service.id}:step:${i}`;
-    li.appendChild(makeCheckButton(key,step,'step'));
+    const key=`${service.id}:step:${stableKeyPart(step)}`;
+    li.appendChild(makeCheckButton(key,shown,'step'));
     li.classList.toggle('done',isChecked(key));
     steps.appendChild(li);
   });
@@ -1069,6 +1672,7 @@ function createServiceCard(item, isPrimary=false){
   const method = displayMethod(service);
   node.querySelector('.method-primary').textContent = method.primary;
   node.querySelector('.method-detail').textContent = method.detail;
+  const facet=queryFacet(activeResultQuery);
 
   const docs = service.documents || [];
   if(docs.length){
@@ -1078,11 +1682,34 @@ function createServiceCard(item, isPrimary=false){
     docs.forEach((d,i)=>{
       const holder=document.createElement('span');holder.className='document-check-wrap';
       const text=document.createElement('span');text.className='document-chip';text.textContent=d;
-      const key=`${service.id}:doc:${i}`;
+      const key=`${service.id}:doc:${stableKeyPart(d)}`;
       holder.appendChild(makeCheckButton(key,d,'document'));
       holder.appendChild(text);holder.classList.toggle('done',isChecked(key));wrap.appendChild(holder);
     });
+  }else if(facet.documents){
+    const sec=node.querySelector('.documents-section');sec.classList.remove('hidden');
+    const wrap=sec.querySelector('.document-chips');const text=document.createElement('span');text.className='document-chip';text.textContent='준비물 정보가 데이터에 확인되지 않았어요. 공식 출처에서 확인해주세요.';wrap.appendChild(text);
   }
+  const facts=Array.isArray(service.facts)?service.facts:[];
+  if(facts.length){
+    const requested=new Set(Object.entries(facet).filter(([,v])=>v).map(([k])=>k));
+    const ranked=facts.slice().sort((a,b)=>Number(requested.has(b.facet))-Number(requested.has(a.facet)));
+    const sec=document.createElement('section');sec.className='facts-section';
+    const fh=document.createElement('h4');fh.textContent='질문에 바로 답하기';sec.appendChild(fh);
+    ranked.forEach(f=>{
+      const row=document.createElement('div');row.className='fact-row';row.dataset.facet=f.facet||'';
+      const label=document.createElement('span');label.className='fact-label';label.textContent=f.label||'공식 확인값';
+      const value=document.createElement('strong');value.className='fact-value';value.textContent=f.value||'';
+      row.append(label,value);
+      if(f.applicability){const note=document.createElement('small');note.className='fact-applicability';note.textContent=f.applicability;row.appendChild(note);}
+      if(f.source_url){const a=document.createElement('a');a.className='fact-source';a.href=safeUrl(f.source_url);a.target='_blank';a.rel='noopener';a.textContent=`공식 근거${f.verified_at?` · 확인 ${f.verified_at}`:''}`;row.appendChild(a);}
+      sec.appendChild(row);
+    });
+    node.querySelector('.source-details')?.before(sec);
+  }else if(facet.amount||facet.period||facet.eligibility||facet.schedule||facet.operations){
+    const box=document.createElement('div');box.className='fact-missing';box.textContent='질문한 세부 정보는 현재 검증 데이터에 직접 확인값이 없어요. 아래 공식 출처에서 최신 내용을 확인해주세요.';node.querySelector('.source-details')?.before(box);
+  }
+  const notices=service.user_notice||[];if(notices.length){const box=document.createElement('div');box.className='user-notice';const b=document.createElement('b');b.textContent='확인할 점';box.appendChild(b);notices.slice(0,3).forEach(v=>{const p=document.createElement('p');p.textContent=v;box.appendChild(p);});node.querySelector('.source-details')?.before(box);}
 
   const locationCallout = node.querySelector('.location-callout');
   if(dept.location){
@@ -1097,24 +1724,28 @@ function createServiceCard(item, isPrimary=false){
     const latest = document.createElement('a');
     latest.className = 'action-link secondary';
     latest.href = (service.sources && service.sources[0]?.url) ? safeUrl(service.sources[0].url) : 'https://www.scnu.ac.kr/SCNU/main.do';
-    latest.target = '_blank'; latest.rel = 'noopener'; latest.textContent = '최신 공식안내 확인';
+    latest.target = '_blank'; latest.rel = 'noopener'; latest.textContent = '공식 안내·공지 확인';
     actions.appendChild(latest);
   }
 
-  (service.action_links || []).slice(0,3).forEach((l,i)=>{
+  const actionSeen=new Set([...actions.querySelectorAll('a')].map(a=>a.href));
+  (service.action_links || []).forEach((l)=>{
+    const href=safeUrl(l.url);if(href==='#'||actionSeen.has(href))return;actionSeen.add(href);
     const a = document.createElement('a');
-    a.className = i===0 ? 'action-link' : 'action-link secondary';
-    a.href = safeUrl(l.url); a.target = '_blank'; a.rel = 'noopener'; a.textContent = l.label;
+    a.className = actions.children.length===0 ? 'action-link' : 'action-link secondary';
+    a.href = href; a.target = '_blank'; a.rel = 'noopener'; a.textContent = l.label||'공식 페이지 열기';
     actions.appendChild(a);
   });
   if(!actions.children.length)actions.classList.add('hidden');
 
-  const sources = node.querySelector('.source-list');
-  (service.sources || []).forEach((s,i)=>{
+  const sources = node.querySelector('.source-list');const sourceSeen=new Set();
+  (service.sources || []).forEach((src)=>{
+    const href=safeUrl(src.url);if(href==='#'||sourceSeen.has(href))return;sourceSeen.add(href);
     const a = document.createElement('a');
-    a.href = safeUrl(s.url); a.target = '_blank'; a.rel = 'noopener';
-    a.textContent = `공식 출처 ${i+1}`;
-    a.title=s.url;
+    a.href = href; a.target = '_blank'; a.rel = 'noopener';
+    const freshness=sourceFreshness(src);const stale=freshness.stale?' · 재확인 권장':'';
+    a.textContent = `${src.label||'순천대 공식 출처'}${src.verified_at ? ` · 확인 ${src.verified_at}` : ' · 확인일 미기록'}${stale}`;
+    a.title=src.url;
     sources.appendChild(a);
   });
 
@@ -1155,51 +1786,136 @@ function showSpecific(item){
   window.scrollTo({top:$('#searchState').offsetTop-40,behavior:'smooth'});
 }
 
+function unresolvedAfterClassifier(clauses=[],result={}){
+  const input=[...new Set((clauses||[]).map(x=>String(x||'').trim()).filter(Boolean))];
+  if(!input.length)return [];
+  const statuses=Array.isArray(result?.intent_statuses)?result.intent_statuses:[];
+  const matched=statuses.filter(x=>x?.status==='matched');
+  const explicitlyUnresolved=statuses.filter(x=>['ambiguous','not_found','out_of_scope'].includes(x?.status));
+  const spanMatchesClause=(span,clause)=>{const a=normalizeQuery(span),b=normalizeQuery(clause);return Boolean(a&&b&&(b.includes(a)||a.includes(b)));};
+  const remaining=input.filter(clause=>{
+    if(explicitlyUnresolved.some(x=>spanMatchesClause(x?.evidence_span,clause)))return true;
+    if(matched.some(x=>spanMatchesClause(x?.evidence_span,clause)))return false;
+    return true;
+  });
+  const hasUsableSpans=statuses.some(x=>String(x?.evidence_span||'').trim());
+  if(!hasUsableSpans&&result?.coverage_complete===true&&(result?.service_ids||[]).length>=input.length)return [];
+  return remaining;
+}
+function renderUnresolvedNotice(clauses=[]){
+  const host=$('#resultSummary');if(!host||!clauses.length)return;
+  const unique=[...new Set(clauses.map(x=>String(x||'').trim()).filter(Boolean))].slice(0,5);if(!unique.length)return;
+  const box=document.createElement('section');box.className='unresolved-notice partial-miss-notice';box.setAttribute('role','status');
+  const head=document.createElement('div');head.className='partial-miss-head';
+  const icon=document.createElement('span');icon.className='partial-miss-icon';icon.setAttribute('aria-hidden','true');icon.textContent='!';
+  const text=document.createElement('div');const h=document.createElement('b');h.textContent=unique.length===1?'일부 요청은 찾지 못했어요.':`${unique.length}개의 요청은 찾지 못했어요.`;
+  const lead=document.createElement('p');lead.className='partial-miss-lead';lead.textContent='구체적인 키워드로 바꿔 검색해보세요.';
+  text.append(h,lead);head.append(icon,text);box.appendChild(head);
+  const list=document.createElement('div');list.className='partial-miss-list';
+  unique.forEach(c=>{const item=document.createElement('div');item.className='partial-miss-item';const label=document.createElement('span');label.textContent='찾지 못함';const q=document.createElement('strong');q.textContent=`“${c}”`;item.append(label,q);list.appendChild(item);});
+  box.appendChild(list);host.appendChild(box);
+}
+function renderResultLimitNotice(route){const hidden=Math.max(0,Number(route?.truncated_count)||0);if(!hidden)return;const host=$('#resultSummary');if(!host)return;const box=document.createElement('section');box.className='unresolved-notice result-limit-notice';const b=document.createElement('b');b.textContent='한 번에 최대 5개 업무까지 안내해요.';const p=document.createElement('p');p.textContent=`입력에서 ${Number(route?.total_intents)||5+hidden}개의 독립 업무를 찾았어요. 나머지 ${hidden}개는 별도로 검색해주세요.`;box.append(b,p);host.appendChild(box);}
+function shouldAssistMissingOnly(query,route){
+  if(location.protocol==='file:'||!route||route.status!=='answer'||!(route.items||[]).length)return false;
+  // Keep the deterministic engine authoritative when it already resolves the query.
+  // Gemini is only a fallback for explicit clauses that the existing engine could not resolve.
+  const unresolved=findUnresolvedClauses(query);
+  if(!unresolved.length)return false;
+  return (route.items||[]).length<5;
+}
+
+function renderAssistPending(){
+ activeResultQuery='';clearResultSummary();
+ $('#resultHeading').textContent='입력 내용을 조금 더 확인하고 있어요.';
+ const grid=$('#resultGrid');grid.innerHTML='';grid.setAttribute('role','status');grid.style.gridTemplateColumns='1fr';grid.classList.remove('multi-result-grid');
+ const box=document.createElement('div');box.className='no-result assist-pending';
+ const h=document.createElement('h3');h.textContent='기본 검색에서 확정하기 어려운 표현을 확인 중이에요.';
+ const p=document.createElement('p');p.textContent='잠시 후에도 확정하기 어렵다면 더 구체적인 키워드와 공식 출처 확인 방법을 안내할게요.';
+ box.append(h,p);grid.appendChild(box);
+}
 async function performSearch(options={}){
  const q=$('#searchInput').value.trim().slice(0,300);if(!q){$('#searchInput').focus();return;}
- cancelPendingClassifier();const requestId=searchSequence;
+ cancelPendingClassifier();pendingClarificationIds=[];const requestId=searchSequence;
  $('#browseState').classList.add('hidden');$('#searchState').classList.remove('hidden');$('#clarificationBox').classList.add('hidden');clearResultSummary();setLoading(false);
- const t0=performance.now();let route;try{route=searchCampusServices(q);}catch(e){console.error(e);route={status:'unknown',items:[]};}const ms=performance.now()-t0;
- if(route.status==='answer'&&route.items?.length){if(options.saveRecent!==false)addRecentSearch(q);renderSearchResult(q,route,ms);return;}
- renderNoResult(q);
- if(route.reason==='out_of_scope'||route.reason==='no_signal'||location.protocol==='file:')return;
- if(!hasCampusIntentSignal(q)&&!detectConcept(q)&&!isSafeStandaloneQuery(q))return;
- classifyUncertainQuery(q).then(r=>{
+ const t0=performance.now();let route;try{route=searchCampusServices(q);}catch(e){console.error(e);route={status:'unknown',items:[],reason:'error'};}const ms=performance.now()-t0;
+ route.confidence=classifyRouteConfidence(route,q);route.evidence=buildSearchEvidence(q,route);
+ if(route.status==='answer'&&route.items?.length){
+   const unresolved=findUnresolvedClauses(q);route.unresolved_clauses=unresolved;
+   if(options.saveRecent!==false)addRecentSearch(q);renderSearchResult(q,route,ms);
+   if(!shouldAssistMissingOnly(q,route)){if(unresolved.length)renderUnresolvedNotice(unresolved);return;}
+   setLoading(true);const matched=route.items.slice(0,5).map(x=>x.service.id);
+   // The existing deterministic engine stays authoritative. Gemini sees only the clauses that remained
+   // unresolved and may add missing service IDs into the remaining display slots; it never re-judges
+   // or replaces the services already found by the local engine.
+   classifyUncertainQuery(q,{assist_mode:'missing_only',matched_service_ids:matched,unresolved_clauses:unresolved}).then(r=>{
+     if(requestId!==searchSequence||$('#searchInput').value.trim()!==q)return;
+     if(r?.mode!=='classifier'){renderUnresolvedNotice(unresolved);return;}
+     if(r.confidence!=='high'||r.needs_clarification||r.coverage_complete!==true){renderUnresolvedNotice(unresolved);renderAiClarification(r);return;}
+     const merged=mergeClassifierResult(route,r,{partial:true,coverageAudit:false});
+     const stillUnresolved=unresolvedAfterClassifier(unresolved,r);
+     if(merged!==route)renderSearchResult(q,merged,ms);
+     if(stillUnresolved.length)renderUnresolvedNotice(stillUnresolved);
+   }).catch(()=>{if(requestId===searchSequence)renderUnresolvedNotice(unresolved);}).finally(()=>{if(requestId===searchSequence)setLoading(false);});return;
+ }
+ const aiBlockedReasons=new Set(['out_of_scope','out_of_scope_other_university','role_mismatch','out_of_scope_general_advice','generation_not_routing','no_action']);
+ // A deterministic no-signal result is exactly where the classifier adds value: students should not
+ // need to know the catalog's official wording. Explicitly out-of-scope cases still never call Gemini.
+ const canAssist=location.protocol!=='file:' && !aiBlockedReasons.has(route.reason);
+ if(!canAssist){renderNoResult(q);return;}
+ renderAssistPending();setLoading(true);
+ classifyUncertainQuery(q,{assist_mode:'full'}).then(r=>{
    if(requestId!==searchSequence||$('#searchState').classList.contains('hidden')||$('#searchInput').value.trim()!==q)return;
-   if(r?.mode!=='classifier'||r?.confidence!=='high'||r?.needs_clarification||!r.service_id)return;
-   const s=services.find(x=>x.id===r.service_id);if(!s)return;
-   const c=detectConcept(q);if(c&&s.domain!==c.domain)return;
+   if(r?.mode!=='classifier'){renderNoResult(q);return;}
+   if(r.confidence!=='high'||r.needs_clarification||r.coverage_complete!==true){renderNoResult(q);renderAiClarification(r);return;}
+   const picked=mergeClassifierResult({status:'unknown',items:[],reason:route.reason},r,{partial:false,coverageAudit:false});
+   if(picked.status!=='answer'||!picked.items?.length){renderNoResult(q);return;}
    if(options.saveRecent!==false)addRecentSearch(q);
-   renderSearchResult(q,{status:'answer',items:[{service:s,score:999}],reason:'classifier'},ms);
- }).catch(()=>{});
+   renderSearchResult(q,picked,ms);
+ }).catch(()=>{if(requestId===searchSequence)renderNoResult(q);}).finally(()=>{if(requestId===searchSequence)setLoading(false);});
 }
+
 function renderSearchResult(q,route,ms=0){
  activeResultQuery=q;setLoading(false);clearResultSummary();
- const grid=$('#resultGrid');grid.innerHTML='';grid.style.gridTemplateColumns='';grid.classList.remove('multi-result-grid');
+ const grid=$('#resultGrid');grid.innerHTML='';grid.removeAttribute('role');grid.style.gridTemplateColumns='';grid.classList.remove('multi-result-grid');
  const items=route.items||[];if(!items.length){renderNoResult(q);return;}
  if(route.reason==='multi_intent'){
    const full=items.slice(0,5);
    $('#resultHeading').textContent=`${full.length}개의 관련 업무를 함께 찾았어요.`;
    grid.classList.add('multi-result-grid');
-   const clarifyTarget=full.find(item=>item.service?.clarification?.required)?.service || full[0].service;
-   renderClarificationPrompt(clarifyTarget);renderMultiSummary(full,q);
+   renderMultiSummary(full,q);
+   renderResultLimitNotice(route);
    full.forEach(item=>grid.appendChild(createServiceCard(item,true)));
+   startClarificationQueue(full.map(item=>item.service));
  }else{
-   $('#resultHeading').textContent=route.broad
+   $('#resultHeading').textContent=route.reason==='classifier'
+     ? '입력 내용을 이렇게 이해했어요.'
+     : route.broad
      ? `“${q}”와 관련된 업무를 모아봤어요.`
      : route.reason==='semantic'
        ? `“${q}”의 의미와 가까운 공식 업무를 찾았어요.`
        : `“${q}”에 가장 가까운 공식 업무예요.`;
-   renderClarificationPrompt(items[0].service);
    grid.appendChild(createServiceCard(items[0],true));
+   startClarificationQueue([items[0].service]);
    if(items.length>1){const alt=renderAlternatives(items);if(alt)grid.appendChild(alt);}
  }
+ $('#resultHeading').setAttribute('tabindex','-1');$('#resultHeading').focus({preventScroll:true});
  window.scrollTo({top:$('#searchState').offsetTop-35,behavior:'smooth'});
 }
+globalThis.EodigaDebug={
+ search(query){
+   const q=String(query||'').slice(0,300);
+   const route=searchCampusServices(q);
+   route.confidence=classifyRouteConfidence(route,q);
+   route.evidence=buildSearchEvidence(q,route);
+   return route;
+ }
+};
+
 function renderNoResult(q){
  activeResultQuery='';setLoading(false);clearResultSummary();
  $('#resultHeading').textContent='가장 가까운 업무를 찾기 어려워요.';
- const grid=$('#resultGrid');grid.innerHTML='';grid.style.gridTemplateColumns='1fr';grid.classList.remove('multi-result-grid');
+ const grid=$('#resultGrid');grid.innerHTML='';grid.setAttribute('role','status');grid.style.gridTemplateColumns='1fr';grid.classList.remove('multi-result-grid');
  grid.innerHTML=`<div class="no-result">
    <h3>관련 키워드를 조금 더 구체적으로 입력해보세요.</h3>
    <p class="no-result-copy">
@@ -1235,6 +1951,22 @@ function toggleQuickBrowse(){
   setQuickBrowseExpanded(toggle.getAttribute('aria-expanded')!=='true');
 }
 
+function setBrowseExpanded(expanded){
+  const section=$('#browseState');
+  const toggle=$('#browseToggle');
+  const grid=$('#popularGrid');
+  if(!section||!toggle||!grid)return;
+  const open=Boolean(expanded);
+  section.classList.toggle('is-collapsed',!open);
+  toggle.setAttribute('aria-expanded',open?'true':'false');
+  grid.hidden=!open;
+}
+function toggleBrowse(){
+  const toggle=$('#browseToggle');
+  if(!toggle)return;
+  setBrowseExpanded(toggle.getAttribute('aria-expanded')!=='true');
+}
+
 function renderCategories(){
   const strip = $('#categoryStrip');
   const counts = getBrowseCategoryCounts();
@@ -1247,14 +1979,17 @@ function renderCategories(){
     const b = document.createElement('button');
     b.className = 'category-chip' + (cat===currentCategory ? ' active':'');
     b.type = 'button';
+    b.setAttribute('aria-pressed',cat===currentCategory?'true':'false');
     b.textContent = cat === '전체' ? '전체 업무' : `${categoryIcons[cat]||'•'} ${cat}`;
     b.addEventListener('click',()=>{
+      cancelPendingClassifier();setLoading(false);
       currentCategory=cat;
+      if(cat==='전체')browseShowAllCategories=false;
       renderCategories();
       renderPopular();
+      $('#browseState').classList.remove('hidden');
+      $('#searchState').classList.add('hidden');
       if(cat!=='전체'){
-        $('#browseState').classList.remove('hidden');
-        $('#searchState').classList.add('hidden');
         window.scrollTo({top:$('#browseState').offsetTop-30,behavior:'smooth'});
       }
     });
@@ -1273,14 +2008,23 @@ function makePopularCard(category,title,description,countText,onClick){
 
 function renderPopular(){
   const grid = $('#popularGrid');const counts = getBrowseCategoryCounts();
-  const cats=currentCategory==='전체'?featuredCategories.filter(c=>counts[c]):[currentCategory];
+  const cats=currentCategory==='전체'?[...preferredCategoryOrder.filter(c=>counts[c]),...Object.keys(counts).filter(c=>!preferredCategoryOrder.includes(c)).sort((a,b)=>(counts[b]||0)-(counts[a]||0))]:[currentCategory];
   grid.innerHTML='';
   if(currentCategory !== '전체'){
-    const subset = getBrowseServices().filter(s=>s.category===currentCategory).slice(0,24);
+    const subset = getBrowseServices().filter(s=>s.category===currentCategory);
     subset.forEach(s=>grid.appendChild(makePopularCard(s.category,s.title,s.description||'',s.category,()=>showSpecific({service:s,score:100}))));
     return;
   }
-  cats.forEach(cat=>grid.appendChild(makePopularCard(cat,cat,categoryCopy(cat),`${counts[cat]||0}개`,()=>{currentCategory=cat;renderCategories();renderPopular();})));
+  const visibleCats=browseShowAllCategories?cats:cats.slice(0,BROWSE_PREVIEW_LIMIT);
+  visibleCats.forEach(cat=>grid.appendChild(makePopularCard(cat,cat,categoryCopy(cat),`${counts[cat]||0}개`,()=>{currentCategory=cat;browseShowAllCategories=false;renderCategories();renderPopular();})));
+  if(cats.length>BROWSE_PREVIEW_LIMIT){
+    const wrap=document.createElement('div');wrap.className='popular-more-wrap';
+    const btn=document.createElement('button');btn.type='button';btn.className='popular-more-btn';
+    btn.setAttribute('aria-expanded',browseShowAllCategories?'true':'false');
+    btn.textContent=browseShowAllCategories?'간단히 보기':`전체 ${cats.length}개 카테고리 보기`;
+    btn.addEventListener('click',()=>{browseShowAllCategories=!browseShowAllCategories;renderPopular();});
+    wrap.appendChild(btn);grid.appendChild(wrap);
+  }
 }
 
 function categoryCopy(cat){
@@ -1344,29 +2088,36 @@ function resetSearch(){
  $('#searchInput').value='';clearResultSummary();
  $('#clarificationBox').classList.add('hidden');$('#clarificationBox').innerHTML='';
  $('#searchState').classList.add('hidden');$('#browseState').classList.remove('hidden');
- currentCategory='전체';renderCategories();renderPopular();
+ currentCategory='전체';browseShowAllCategories=false;renderCategories();renderPopular();
  const shell=$('#searchShell');const top=shell?shell.getBoundingClientRect().top+window.scrollY-100:0;
  window.scrollTo({top:Math.max(0,top),behavior:'smooth'});
  setTimeout(()=>$('#searchInput').focus(),220);
 }
 
 async function init(){
+  const grid=$('#popularGrid');
   try{
-    const res = await fetch('./scnu_services.json');
+    if(grid)grid.setAttribute('aria-busy','true');
+    const res = await fetch(`./scnu_services.json?v=${encodeURIComponent(DATA_CACHE_VERSION)}`,{cache:'no-cache'});
+    if(!res.ok)throw new Error(`data_http_${res.status}`);
     dataset = await res.json();
-    services = dataset.services || [];
+    services = Array.isArray(dataset.services)?dataset.services:[];
+    if(!services.length)throw new Error('empty_dataset');
     buildSearchIndex();
     renderCategories();
     renderPopular();
     setQuickBrowseExpanded(true);
+    setBrowseExpanded(true);
     renderRecentSearches();
   }catch(e){
     console.error('데이터 초기화 오류',e);
-  }
+    if(grid){grid.innerHTML='';const box=document.createElement('div');box.className='no-result';box.setAttribute('role','alert');const h=document.createElement('h3');h.textContent='업무 데이터를 불러오지 못했어요.';const p=document.createElement('p');p.textContent='네트워크 상태를 확인한 뒤 다시 시도해주세요.';const b=document.createElement('button');b.type='button';b.className='browse-help-btn';b.textContent='다시 불러오기';b.addEventListener('click',init);box.append(h,p,b);grid.appendChild(box);}
+  }finally{if(grid)grid.removeAttribute('aria-busy');}
 }
 
 $('#searchBtn').addEventListener('click',performSearch);
-$('#searchInput').addEventListener('keydown',e=>{if(e.key==='Enter') performSearch();});
+$('#searchInput').addEventListener('input',()=>{if(pendingClassifierController){cancelPendingClassifier();setLoading(false);}});
+$('#searchInput').addEventListener('keydown',e=>{if(e.key==='Enter'&&!$('#searchBtn')?.disabled) performSearch();});
 $$('.example-chip').forEach(btn=>{
   btn.addEventListener('click',()=>{
     $('#searchInput').value=btn.textContent.trim();
@@ -1376,5 +2127,6 @@ $$('.example-chip').forEach(btn=>{
 
 const resetSearchBtn=$('#resetSearchBtn');if(resetSearchBtn)resetSearchBtn.addEventListener('click',resetSearch);
 const quickToggle=$('#quickToggle');if(quickToggle)quickToggle.addEventListener('click',toggleQuickBrowse);
+const browseToggle=$('#browseToggle');if(browseToggle)browseToggle.addEventListener('click',toggleBrowse);
 
 init();
