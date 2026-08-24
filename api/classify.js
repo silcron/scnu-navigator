@@ -177,7 +177,26 @@ module.exports=async function handler(req,res){
       body:JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{thinkingConfig:{thinkingLevel:'low'},responseFormat:{text:{mimeType:'application/json',schema:{type:'object',properties:{intents:{type:'array',maxItems:remainingSlots,items:{type:'object',properties:{status:{type:'string',enum:['matched','ambiguous','not_found','out_of_scope']},service_id:{type:'string'},evidence_span:{type:'string'}},required:['status','service_id','evidence_span'],additionalProperties:false}},confidence:{type:'string',enum:['high','medium','low']},needs_clarification:{type:'boolean'},coverage_complete:{type:'boolean'}},required:['intents','confidence','needs_clarification','coverage_complete'],additionalProperties:false}}}}})
     });
     const payload=await response.json();
-    if(!response.ok)return res.status(200).json({mode:'unavailable',reason:'classification_failed'});
+
+if(!response.ok){
+  const upstreamError={
+    status:response.status,
+    code:payload?.error?.code??null,
+    error_status:payload?.error?.status??null,
+    message:String(payload?.error?.message||'').slice(0,600),
+    model
+  };
+
+  console.error(
+    '[Gemini classify upstream error]',
+    JSON.stringify(upstreamError)
+  );
+
+  return res.status(200).json({
+    mode:'unavailable',
+    reason:'classification_failed'
+  });
+}
     let parsed=null;try{parsed=JSON.parse(parseGeminiText(payload));}catch(_){ }
     const clean=sanitize(parsed,candidates,query,{assist_mode:assistMode,exclude_ids:assistMode==='missing_only'?matchedIds:[],max_ids:remainingSlots});
     return clean?res.status(200).json(clean):res.status(200).json({mode:'unavailable',reason:'classification_invalid'});
