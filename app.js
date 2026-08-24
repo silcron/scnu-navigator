@@ -484,6 +484,10 @@ function strongRouteKeywordMatches(q){
 function isObviousNonCampus(q){
  const n=normalizeQuery(q);
  if(n.includes('연애')&&n.includes('상담')&&!['순천대','학교','교내','학생상담','상담센터'].some(x=>n.includes(normalizeQuery(x))))return true;
+ // Explicit employment/life context must not be reinterpreted as a university leave request merely because it contains '한 학기 쉬고 싶어'.
+ const explicitWorkContext=['회사','직장','직장에서','회사에서','출근','퇴근','연차','휴가','퇴사','알바','아르바이트'].some(x=>n.includes(normalizeQuery(x)));
+ const explicitAcademicContext=['순천대','순천대학교','국립순천대학교','학교','교내','캠퍼스','대학','학업','휴학','복학','수강','학생'].some(x=>n.includes(normalizeQuery(x)));
+ if(explicitWorkContext&&!explicitAcademicContext&&(n.includes('쉬고싶')||n.includes('쉬어야')||n.includes('한학기쉬')||n.includes('잠깐쉬')))return true;
  if(n.includes('유튜브')&&['뭐봐','뭐볼까','볼만한','추천'].some(x=>n.includes(normalizeQuery(x)))&&!['순천대','학교','교내','대학','홍보'].some(x=>n.includes(normalizeQuery(x))))return true;
  const recommendationObjects=['맛집','야식','배달','음식','메뉴','선물','노래','음악','영화','드라마','웹툰','소설','유튜브','영상','여행지','여행코스','카페','게임','노트북','컴퓨터','이어폰','휴대폰','핸드폰','멀티탭','책','도서','아이디어','단톡','이름추천','방꾸미기','꾸미기','옷','의상','꽃다발','슬로건','자취방'];
  if(n.includes('추천')&&recommendationObjects.some(x=>n.includes(x)))return true;
@@ -818,12 +822,22 @@ function clauseNegatesService(part,service){
  if(id==='dorm_internet'&&(n.includes('기숙사인터넷은괜찮')||n.includes('생활관인터넷은괜찮')))return true;
  return false;
 }
+function resolveMultiClause(part){
+ // Inside a validated multi-intent candidate, a clear local object+action pair should beat
+ // broad fuzzy ranking (e.g. '수업 신청' -> 수강신청, '기숙사 방 빼기' -> 생활관 퇴사).
+ // Preserve exact/relationship core workflows so the resolver cannot flatten canonical or atomic queries.
+ const core=globalThis.EodigaSearchCore?.resolve?.(part,services);
+ const protectedReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','natural_title_question','natural_title_inquiry','exact_situation','exact_route_alias','p0_resolver']);
+ if(core&&(protectedReasons.has(core.reason)||shouldAlwaysKeepCoreSafety(core)||hasStrongAtomicRelationshipSyntax(part)))return searchCampusServices(part,true);
+ const natural=localNaturalRoute(part);if(natural)return natural;
+ return searchCampusServices(part,true);
+}
 function collectResolvedMultiParts(parts){
  const collected=[];const seen=new Set();let sharedDomain=null;let resolvedPartCount=0;
  for(const rawPart of parts){
    if(isGenericMultiFiller(rawPart))continue;
    const part=canonicalizeMultiClauseEnding(trimMultiClauseWrapper(rawPart));if(!part||normalizeQuery(part).length<2)continue;
-   let pr=(parts.length>=2?resolveImplicitMultiChain(part,1):null)||searchCampusServices(part,true);
+   let pr=(parts.length>=2?resolveImplicitMultiChain(part,1):null)||resolveMultiClause(part);
    if(sharedDomain&&(!partHasExplicitConcept(part))){
      const topDomain=pr?.items?.[0]?.service?.domain;
      const topScore=pr?.items?.[0]?.score||0;
@@ -855,6 +869,17 @@ function implicitConnectorCandidates(raw){
  }
  return out;
 }
+function hasStrongImplicitMultiCandidate(raw){
+ const text=String(raw||'').trim();if(!text)return false;
+ for(const cut of implicitConnectorCandidates(text)){
+   const left=canonicalizeMultiClauseEnding(text.slice(0,cut).trim()),right=text.slice(cut).trim();
+   if(!left||!right)continue;
+   const leftStrong=Boolean(localNaturalRouteId(left)||hasExplicitCampusConceptWord(left));
+   const rightStrong=Boolean(localNaturalRouteId(right)||hasExplicitCampusConceptWord(right));
+   if(leftStrong&&rightStrong)return true;
+ }
+ return false;
+}
 function resolveImplicitMultiChain(raw,depth=0){
  if(depth>=4)return null;
  const text=String(raw||'').trim();if(normalizeQuery(text).length<4)return null;
@@ -863,14 +888,14 @@ function resolveImplicitMultiChain(raw,depth=0){
  for(const cut of implicitConnectorCandidates(text)){
    const left=canonicalizeMultiClauseEnding(text.slice(0,cut).trim()),right=text.slice(cut).trim();
    if(!left||!right)continue;
-   const lr=searchCampusServices(left,true);
+   const lr=resolveMultiClause(left);
    if(lr?.status!=='answer'||!(lr.items||[]).length)continue;
    const leftItems=lr.reason==='multi_intent'?(lr.items||[]).slice(0,5):[lr.items[0]];
    const rrMulti=resolveImplicitMultiChain(right,depth+1);
    let rightItems=[];
    if(rrMulti?.status==='answer'&&(rrMulti.items||[]).length)rightItems=rrMulti.items;
    else{
-     const rr=searchCampusServices(right,true);
+     const rr=resolveMultiClause(right);
      if(rr?.status==='answer'&&(rr.items||[]).length)rightItems=rr.reason==='multi_intent'?(rr.items||[]).slice(0,5):[rr.items[0]];
    }
    if(!rightItems.length)continue;
@@ -1094,7 +1119,7 @@ function pickBestValidatedMulti(candidates){
 // a clear administrative object + action/state combination.  These are concept-level lexicons,
 // not full-sentence exceptions: aliases can combine freely with action families.
 const LOCAL_NL_LEXICON={
-  studentCard:['학생증','학생 카드','학생카드','학교 카드','학교카드','학교 신분증','학교신분증','학생 id','학생id','student id','studentid'],
+  studentCard:['학생증','학생 카드','학생카드','학교 카드','학교카드','학교 신분증','학교신분증','학생 id','학생id','student id','studentid','id 카드','id카드','아이디 카드','아이디카드'],
   military:['군대','입대','입영','군입대','군복무','병역','영장','입영통지','입영 통지'],
   health:['보건실','보건진료실','보건소','진료','치료','응급처치','약'],
   club:['동아리','학교 모임','교내 모임','학생 모임','소모임','학생모임','교내모임','학교모임'],
@@ -1112,9 +1137,9 @@ const LOCAL_NL_ACTION={
   borrow:/(빌리|대여|빌릴|쓰고\s*싶|사용.{0,4}(?:하고|신청|싶)|이용.{0,4}(?:하고|신청|싶)|배차|예약)/i,
   prove:/(증명|증빙|서류|종이|문서|떼|뽑|출력|발급|받고\s*싶)/i,
   changeCourse:/(빼고\s*싶|빼려|빼야|삭제|취소|철회|바꾸|변경|정정)/i,
-  registerCourse:/(수강신청|신청.{0,4}(?:하고|싶)|과목.{0,3}담|담고\s*싶|등록.{0,4}(?:하고|싶)|듣고\s*싶)/i,
+  registerCourse:/(수강신청|신청.{0,5}(?:하고|싶|해야|하려|할\s*거|하러)|과목.{0,3}담|담고\s*싶|등록.{0,5}(?:하고|싶|해야|하려)|듣고\s*싶)/i,
   enterDorm:/(입사|들어가고\s*싶|들어가려|살고\s*싶|신청.{0,4}(?:하고|싶))/i,
-  leaveDorm:/(퇴실|퇴관|방\s*빼|나가고\s*싶|나가려|기숙사.{0,4}나가)/i,
+  leaveDorm:/(퇴실|퇴관|방\s*(?:도\s*)?빼(?:야|고|려|고\s*싶)?|나가고\s*싶|나가려|(?:기숙사|생활관).{0,7}나가(?:야|고|려|고\s*싶)?)/i,
   facilityProblem:/(고장|안\s*(?:돼|됨|되)|문제|누수|물\s*새|물이\s*새|물샘|망가)/i,
   apply:/(지원|신청|들어가고\s*싶|들어가려|선발|모집)/i
 };
@@ -1126,7 +1151,7 @@ function localNaturalRouteId(query){
 
   // Student ID: colloquial "school card" + replacement/loss semantics.
   const externalCard=/(신용|체크|은행|카드사|법인|교통|하이패스|멤버십|포인트)\s*카드/i.test(raw);
-  const studentCard=localNlHas(raw,LOCAL_NL_LEXICON.studentCard)||(campus&&/(?:^|\s)id\s*카드/i.test(raw))||(!externalCard&&/(?:^|\s)카드(?:\s|$)/i.test(raw));
+  const studentCard=localNlHas(raw,LOCAL_NL_LEXICON.studentCard)||(campus&&/(?:^|\s)id\s*카드/i.test(raw))||(!externalCard&&/카드/i.test(raw));
   if(studentCard&&LOCAL_NL_ACTION.replace.test(raw))return 'student_id_reissue';
   if(studentCard&&/(최초|처음|신규).{0,5}(?:발급|만들|받)/i.test(raw))return 'student_id_first';
 
@@ -1220,7 +1245,7 @@ function searchCampusServicesRaw(query,metaGuard=false){
  // A high-confidence local object+action interpretation outranks fuzzy catalog decomposition for
  // ordinary single-intent wording. Explicit enumerations and protected relationship workflows still
  // go through the existing multi/atomic logic below.
- if(!p0&&!hasExplicitEnumerationSyntax(q)&&!hasStrongAtomicRelationshipSyntax(q)){
+ if(!p0&&splitMultiIntent(q).length<2&&!hasStrongImplicitMultiCandidate(q)&&!hasExplicitEnumerationSyntax(q)&&!hasStrongAtomicRelationshipSyntax(q)){
    const localNaturalEarly=localNaturalRoute(q);if(localNaturalEarly)return localNaturalEarly;
  }
  if(!metaGuard){
