@@ -10,7 +10,7 @@ const RECENT_SEARCH_KEY = 'eodiga_recent_searches_v2';
 const CHECK_STATE_KEY = 'eodiga_check_state_v2';
 const DATA_CACHE_VERSION = '5.4.1';
 const classifierCache = new Map();
-const CLASSIFIER_CACHE_STORAGE_KEY = 'eodiga_classifier_cache_v727';
+const CLASSIFIER_CACHE_STORAGE_KEY = 'eodiga_classifier_cache_v7210';
 const CLASSIFIER_CACHE_LIMIT = 30;
 const CAMPUS_MAP_URL = 'https://www.scnu.ac.kr/SCNU/cm/cntnts/cntntsView.do?cntntsId=1046&mi=1182';
 
@@ -833,7 +833,7 @@ function resolveMultiClause(part){
  return searchCampusServices(part,true);
 }
 function collectResolvedMultiParts(parts){
- const collected=[];const seen=new Set();let sharedDomain=null;let resolvedPartCount=0;
+ const collected=[];const seen=new Set();let sharedDomain=null;let resolvedPartCount=0,localSemanticParts=0;
  for(const rawPart of parts){
    if(isGenericMultiFiller(rawPart))continue;
    const part=canonicalizeMultiClauseEnding(trimMultiClauseWrapper(rawPart));if(!part||normalizeQuery(part).length<2)continue;
@@ -849,12 +849,13 @@ function collectResolvedMultiParts(parts){
      }
    }
    if(pr?.status!=='answer'||!(pr.items||[]).length)continue;
+   if(pr.reason==='local_natural')localSemanticParts++;
    const partItems=(pr.reason==='multi_intent'?(pr.items||[]).slice(0,5):[pr.items[0]]).filter(it=>it?.service&&!clauseNegatesService(part,it.service));
    if(!partItems.length)continue;resolvedPartCount++;
    if(!sharedDomain&&partItems[0]?.service)sharedDomain=partItems[0].service.domain;
    for(const it of partItems){if(it?.service&&!seen.has(it.service.id)){seen.add(it.service.id);collected.push(it);}}
  }
- if(resolvedPartCount>=2&&collected.length>=2){const total=collected.length;return {status:'answer',items:collected.slice(0,5),reason:'multi_intent',broad:true,total_intents:total,truncated_count:Math.max(0,total-5),multi_source:'app_clause_first'};}
+ if(resolvedPartCount>=2&&collected.length>=2){const total=collected.length;return {status:'answer',items:collected.slice(0,5),reason:'multi_intent',broad:true,total_intents:total,truncated_count:Math.max(0,total-5),multi_source:'app_clause_first',local_semantic_parts:localSemanticParts};}
  return null;
 }
 function implicitConnectorCandidates(raw){
@@ -1109,7 +1110,11 @@ function pickBestValidatedMulti(candidates){
  if(!valid.length)return null;
  const priority={catalog_whole_query:3,app_clause_first:2,validated_implicit_connector:1};
  const workflowCount=r=>(r.items||[]).filter(it=>it?.service?.kind==='workflow').length;
- valid.sort((a,b)=>(Number(b.total_intents)||b.items?.length||0)-(Number(a.total_intents)||a.items?.length||0)||(b.items?.length||0)-(a.items?.length||0)||workflowCount(b)-workflowCount(a)||((priority[b.multi_source]||0)-(priority[a.multi_source]||0)));
+ const localSemanticStrength=r=>Math.min(5,Number(r?.local_semantic_parts)||0);
+ // When two independently split clauses each resolve through a high-confidence local object+action
+ // interpretation, prefer that evidence over a whole-query catalog co-occurrence guess. Otherwise keep
+ // the established catalog-first tie-breaker to avoid disturbing mature multi-intent behavior.
+ valid.sort((a,b)=>(Number(b.total_intents)||b.items?.length||0)-(Number(a.total_intents)||a.items?.length||0)||(b.items?.length||0)-(a.items?.length||0)||localSemanticStrength(b)-localSemanticStrength(a)||workflowCount(b)-workflowCount(a)||((priority[b.multi_source]||0)-(priority[a.multi_source]||0)));
  return valid[0];
 }
 // -------------------------------------------------------------------------------
@@ -1119,7 +1124,7 @@ function pickBestValidatedMulti(candidates){
 // a clear administrative object + action/state combination.  These are concept-level lexicons,
 // not full-sentence exceptions: aliases can combine freely with action families.
 const LOCAL_NL_LEXICON={
-  studentCard:['학생증','학생 카드','학생카드','학교 카드','학교카드','학교 신분증','학교신분증','학생 id','학생id','student id','studentid','id 카드','id카드','아이디 카드','아이디카드'],
+  studentCard:['학생증','학생 카드','학생카드','학교 카드','학교카드','학교 신분증','학교신분증','학생 id','학생id','student id','studentid','id 카드','id카드','아이디 카드','아이디카드','신원 확인 수단','신원확인수단','신분 확인 수단','신분확인수단','교내 신원 확인','교내 신원확인','학생 신원 확인','학생 신원확인'],
   military:['군대','입대','입영','군입대','군복무','병역','영장','입영통지','입영 통지'],
   health:['보건실','보건진료실','보건소','진료','치료','응급처치','약'],
   club:['동아리','학교 모임','교내 모임','학생 모임','소모임','학생모임','교내모임','학교모임'],
@@ -1130,7 +1135,7 @@ const LOCAL_NL_LEXICON={
 };
 const LOCAL_NL_ACTION={
   replace:/(재발급|재발행|다시.{0,5}(?:받|만들|발급)|새로.{0,5}(?:받|만들|발급)|잃어버|분실|없어졌|없어짐|깨졌|훼손|망가졌|고장났)/i,
-  pause:/(휴학|쉬고\s*싶|쉬어야|쉬려|쉬지|한\s*학기\s*쉬|잠깐.{0,5}(?:쉬|멈추|중단)|학교.{0,5}(?:멈추|쉬)|학업.{0,5}(?:멈추|중단|쉬))/i,
+  pause:/(휴학|쉬고\s*싶|쉬어야|쉬려|쉬지|한\s*학기\s*쉬|(?:잠깐|잠시).{0,6}(?:쉬|멈추|중단)|학교생활.{0,8}(?:쉬|멈추|중단)|학교.{0,5}(?:멈추|쉬|중단)|학업.{0,5}(?:멈추|중단|쉬))/i,
   resume:/(복학|다시.{0,6}(?:학교|대학).{0,5}(?:다니|가|돌아)|학교.{0,5}(?:돌아|복귀)|휴학.{0,6}(?:끝|마치).{0,6}(?:돌아|다니))/i,
   care:/(진료.{0,4}(?:받|보|원|싶)|치료.{0,4}(?:받|원|싶)|약.{0,4}(?:받|타|필요)|(?:아프|아픈|아파|아픔).{0,8}(?:어디|가|진료|약)|보건(?:실|진료실|소).{0,6}(?:가|이용|어디))/i,
   join:/(가입|들어가|들고\s*싶|활동|하고\s*싶|찾아|찾고\s*싶|알아보|궁금)/i,
@@ -1152,8 +1157,11 @@ function localNaturalRouteId(query){
   // Student ID: colloquial "school card" + replacement/loss semantics.
   const externalCard=/(신용|체크|은행|카드사|법인|교통|하이패스|멤버십|포인트)\s*카드/i.test(raw);
   const studentCard=localNlHas(raw,LOCAL_NL_LEXICON.studentCard)||(campus&&/(?:^|\s)id\s*카드/i.test(raw))||(!externalCard&&/카드/i.test(raw));
-  if(studentCard&&LOCAL_NL_ACTION.replace.test(raw))return 'student_id_reissue';
-  if(studentCard&&/(최초|처음|신규).{0,5}(?:발급|만들|받)/i.test(raw))return 'student_id_first';
+  // Explicit first-issue wording wins over generic "새로 발급" wording.
+  // Otherwise, a campus/student identity object combined with loss/replacement or
+  // "새로 준비/마련" language is treated as the practical reissue route.
+  if(studentCard&&/(최초|처음|신규).{0,8}(?:발급|만들|받|준비|마련)/i.test(raw))return 'student_id_first';
+  if(studentCard&&(LOCAL_NL_ACTION.replace.test(raw)||/(?:새로|다시).{0,8}(?:준비|마련)/i.test(raw)))return 'student_id_reissue';
 
   // Military reason + pausing study is structurally a military leave request.
   if(localNlHas(raw,LOCAL_NL_LEXICON.military)&&LOCAL_NL_ACTION.pause.test(raw))return 'leave_military';
@@ -1772,6 +1780,9 @@ function hasIndependentTaskEvidence(clause){
  // particles or verb endings are attached. Unlike the broader semantic detector, this list does not
  // contain generic channel/facet words such as 홈페이지/시간/서류.
  if(hasExplicitCampusConceptWord(raw))return true;
+ // A high-confidence local object+action interpretation is itself evidence of a new task,
+ // even when the object is expressed indirectly (e.g. '교내 신원 확인 수단을 새로 준비').
+ if(localNaturalRouteId(raw))return true;
  // We first extract the fragment's own lexical nucleus. A broad catalog/concept detector by itself
  // is not enough because channel/time words can appear in catalog metadata.
 

@@ -71,7 +71,7 @@ function shortlist(query,max=60){
   }).sort((a,b)=>b.score-a.score||representativePriority(a.s)-representativePriority(b.s)||a.s.id.localeCompare(b.s.id));
 
   const strong=scored.filter(x=>x.score>0);
-  const hasStrongSignal=strong.length>0 && (strong[0].score>=60 || strong.some(x=>x.score>=10000));
+  const hasStrongSignal=strong.length>0 && (strong[0].score>=120 || strong.some(x=>x.score>=10000));
   if(hasStrongSignal){
     const out=[],groups=new Set();
     for(const x of strong){
@@ -85,8 +85,9 @@ function shortlist(query,max=60){
     return out;
   }
 
-  // If deterministic/lexical search has genuinely no signal, don't guess a random top-N.
-  // Give Gemini one compact representative per canonical intent so novel student wording can still be classified.
+  // Weak generic campus words (교내/학교/사용/문의...) must not prune the correct novel intent out
+  // of the shortlist. If there is no genuinely strong lexical signal, give Gemini one compact
+  // representative per canonical intent so novel student wording can still be classified.
   return canonicalRepresentatives().map(s=>({s,score:0,evidence:[]}));
 }
 function parseGeminiText(payload){
@@ -116,7 +117,12 @@ function sanitize(result,candidates,query='',options={}){
     for(const id of raw){if(validIds.has(id)&&candidateIds.has(id)&&!excludedIds.has(id)&&!ids.includes(id))ids.push(id);if(ids.length>=maxIds)break;}
     for(const id of ids)statuses.push({status:'matched',service_id:id,evidence_span:null});
   }
-  if(!ids.length&&!statuses.length)return null;
+  // An empty intents array is a valid classifier result: it can mean that a missing-only
+  // audit found no *new* service to add. Do not mislabel that as classification_invalid.
+  // classification_invalid is reserved for malformed/unparseable model output.
+  if(!ids.length&&!statuses.length){
+    if(!Array.isArray(result?.intents))return null;
+  }
   const evidence=ids.map(id=>({service_id:id,local_evidence:(candidates.find(x=>x.s.id===id)?.evidence||[])}));
   return {mode:'classifier',assist_mode:options.assist_mode||'full',service_ids:ids,service_id:ids[0]||null,confidence:['high','medium','low'].includes(result?.confidence)?result.confidence:'low',needs_clarification:Boolean(result?.needs_clarification)||statuses.some(x=>x.status==='ambiguous'),coverage_complete:result?.coverage_complete===true,intent_statuses:statuses,evidence};
 }
