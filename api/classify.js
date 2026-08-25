@@ -242,8 +242,10 @@ module.exports=async function handler(req,res){
   }
   if(!upstream?.ok){
     const reason=upstream?.kind==='timeout'?'classification_timeout':upstream?.kind==='http'?'classification_failed':'classification_error';
-    // Temporary diagnostics while validating the first real Gemini production calls. Contains no API key.
-    return res.status(200).json({mode:'unavailable',reason,debug:upstream?.debug||{model,attempts:2}});
+    // Keep upstream diagnostics server-side only. Never expose provider details to the browser.
+    const d=upstream?.debug||{};
+    console.warn('[classify] upstream unavailable',{reason,status:d.status??null,code:d.code??null,error_status:d.error_status??null,model:d.model||model,attempts:d.attempts??2});
+    return res.status(200).json({mode:'unavailable',reason});
   }
   let parsed=null;try{parsed=JSON.parse(parseGeminiText(upstream.payload));}catch(_){ }
   const clean=sanitize(parsed,candidates,query,{assist_mode:assistMode,exclude_ids:assistMode==='missing_only'?matchedIds:[],max_ids:remainingSlots});
