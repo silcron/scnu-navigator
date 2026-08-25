@@ -818,7 +818,12 @@ function splitMultiIntent(q){
  const DOT_HOLD='__EODIGA_DOT__';
  marked=marked.replace(/([A-Za-z0-9])\.(?=[A-Za-z0-9])/g,'$1'+DOT_HOLD);
  marked=marked.replace(/[.!?。！？]+/g,'|||').replaceAll(DOT_HOLD,'.');
- marked=marked.replace(/[;,，；/＋+&＆|\n]+/g,'|||');
+ // Preserve ampersands that are part of an alphanumeric keyword/abbreviation (e.g. R&D공고).
+ // Korean enumerations such as 휴학&복학 still split normally because the ampersand is not
+ // surrounded by Latin letters/digits on both sides.
+ const AMP_HOLD='__EODIGA_AMP__';
+ marked=marked.replace(/([A-Za-z0-9])[&＆](?=[A-Za-z0-9])/g,'$1'+AMP_HOLD);
+ marked=marked.replace(/[;,，；/＋+&＆|\n]+/g,'|||').replaceAll(AMP_HOLD,'&');
  const nextConcept='(?:휴학|복학|자퇴|재입학|전과|학과|다전공|복수전공|부전공|학생증|신분증|국가장학금|장학금|등록금|학비|수강|성적|학점|졸업|기숙사|생활관|도서관|통학버스|주차|ROTC|rotc|학군단|교환학생|취업|진로|상담|인권|보건|시설|누수|에어컨|와이파이|향림통|LMS|lms|증명서|재학증명서|대학원|창업|연구|IRB|irb|사업단|우산|노트북)';
  // Split clear additive connectors, but never inside real words such as “또래상담”.
  marked=marked.replace(/(?:^|\s+)(?:뿐만\s+아니라|그리고|또한|동시에|게다가|및)(?=\s+|$)/g,'|||');
