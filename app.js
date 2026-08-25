@@ -209,6 +209,8 @@ function compositeRouteId(query){
 let SEARCH_INDEX=[];
 let KEYWORD_ANCHOR_MAP=new Map();
 let KEYWORD_ANCHORS=[];
+let KEYWORD_ANCHORS_BY_FIRST=new Map();
+let EXACT_SITUATION_GROUP_MAP=new Map();
 let SEARCH_DF=new Map();
 let SEARCH_DOC_COUNT=0;
 let pendingClarificationIds=[];
@@ -299,6 +301,15 @@ function buildSearchIndex(){
  });
  SEARCH_DOC_COUNT=SEARCH_INDEX.length;SEARCH_DF=new Map();
  for(const e of SEARCH_INDEX)for(const t of e.tokenSet)SEARCH_DF.set(t,(SEARCH_DF.get(t)||0)+1);
+ // Pre-index curated situations once. The natural-language exact-situation guard sits on the
+ // hot search path, so rescanning all 411 services and every situation on each keystroke/search
+ // would be unnecessarily expensive, especially on mobile.
+ EXACT_SITUATION_GROUP_MAP=new Map();
+ for(const s of services)for(const raw of (s.situations||[])){
+   const n=normalizeQuery(raw);if(!n)continue;
+   let groups=EXACT_SITUATION_GROUP_MAP.get(n);if(!groups){groups=new Map();EXACT_SITUATION_GROUP_MAP.set(n,groups);}
+   const g=serviceIntentGroup(s),prev=groups.get(g);if(!prev||s.id===g)groups.set(g,s);
+ }
  buildKeywordAnchorIndex();
 }
 function detectConcept(q){
@@ -539,6 +550,8 @@ function buildKeywordAnchorIndex(){
  // broad for exact keyword mode (e.g. SW중심대학사업단 must not expand to every AI program).
  for(const [term,ids] of Object.entries({...KEYWORD_BROAD_PREFERRED_IDS,...KEYWORD_AMBIGUOUS_IDS}))for(const id of ids)if(services.some(s=>s.id===id))add(term,id,'policy');
  KEYWORD_ANCHORS=[...KEYWORD_ANCHOR_MAP.values()].sort((a,b)=>b.term.length-a.term.length||a.term.localeCompare(b.term));
+ KEYWORD_ANCHORS_BY_FIRST=new Map();
+ for(const rec of KEYWORD_ANCHORS){const ch=rec.term[0];if(!KEYWORD_ANCHORS_BY_FIRST.has(ch))KEYWORD_ANCHORS_BY_FIRST.set(ch,[]);KEYWORD_ANCHORS_BY_FIRST.get(ch).push(rec);}
 }
 function keywordRepresentativeIds(rec){
  const n=rec.term;
@@ -591,16 +604,16 @@ function keywordParseCompactSegment(segment){
  // Never allow an anchor to begin in the middle of a previously intended keyword (e.g.
  // 교환학생+생활관 must not manufacture 학생생활관 across the boundary). Try longer anchors
  // first, but backtrack when that choice cannot cover the remainder.
- const byStart=new Map();
- for(const rec of KEYWORD_ANCHORS){
-   let from=0;while(from<n.length){const idx=n.indexOf(rec.term,from);if(idx<0)break;if(!byStart.has(idx))byStart.set(idx,[]);byStart.get(idx).push(rec);from=idx+1;}
- }
- for(const arr of byStart.values())arr.sort((a,b)=>b.term.length-a.term.length||a.term.localeCompare(b.term));
  const memo=new Map();
  const solve=i=>{
    if(i===n.length)return [];
    if(memo.has(i))return memo.get(i);
-   for(const rec of (byStart.get(i)||[])){
+   // Only anchors whose first character can start at the current cursor are relevant.
+   // The per-prefix arrays preserve KEYWORD_ANCHORS' longest-first ordering, so this is
+   // behaviorally identical to the previous occurrence table while avoiding O(all anchors ×
+   // input length) indexOf scans for every long multi-keyword query.
+   for(const rec of (KEYWORD_ANCHORS_BY_FIRST.get(n[i])||[])){
+     if(!n.startsWith(rec.term,i))continue;
      const tail=solve(i+rec.term.length);
      if(tail){const ans=[{term:rec.term,rec},...tail];memo.set(i,ans);return ans;}
    }
@@ -624,7 +637,14 @@ function keywordFirstRoute(query){
  const parsed=[];
  for(const seg of segments){
    const hasBoundary=/[^0-9a-z가-힣]/i.test(seg.normalize('NFKC'));
-   const anchors=hasBoundary?keywordParseTokenSegment(seg):keywordParseCompactSegment(seg);
+   // Prefer visible token boundaries when they produce a complete parse. If a student pastes two
+   // otherwise valid multi-word keywords together without a separator, one token can contain the
+   // end of keyword A and the start of keyword B; token parsing then fails even though the fully
+   // normalized compact string has an exact left-to-right decomposition. In that case only, fall
+   // back to the compact parser. This keeps ordinary token boundaries authoritative while making
+   // '교내 시설물 고장 신고수강신청내역확인서' behave like the separated form.
+   let anchors=hasBoundary?keywordParseTokenSegment(seg):keywordParseCompactSegment(seg);
+   if((!anchors||!anchors.length)&&hasBoundary)anchors=keywordParseCompactSegment(seg);
    if(!anchors||!anchors.length)return null;
    parsed.push(...anchors);
  }
@@ -636,6 +656,176 @@ function keywordFirstRoute(query){
  if(!ids.length)return null;
  const items=ids.slice(0,5).map((id,i)=>({service:services.find(s=>s.id===id),score:10000-i})).filter(x=>x.service);
  return {status:'answer',items,reason:items.length>1?'multi_intent':'keyword_exact',broad:items.length>1,total_intents:ids.length,truncated_count:Math.max(0,ids.length-5),multi_source:'keyword_first'};
+}
+
+function exactSituationPriorityRoute(query){
+ const raw=String(query||'').trim(),n=normalizeQuery(raw);if(!n)return null;
+ // Explicit separators/conjunctions are deliberate multi-keyword input. In that case the
+ // keyword-first contract stays authoritative even if the full string happens to resemble
+ // a curated natural-language example.
+ if(/[,;\n]+|\s+\/\s+|(?:^|\s)(?:그리고|또한|및|또)(?=\s|$)/.test(raw))return null;
+ // A complete registered title/alias/route/policy keyword is also keyword-first ownership.
+ // Curated situations may clarify natural phrasing, but they must never replace an exact
+ // keyword the product has explicitly promised to keep stable.
+ if(KEYWORD_ANCHOR_MAP.has(n))return null;
+ const byGroup=EXACT_SITUATION_GROUP_MAP.get(n);
+ if(!byGroup||byGroup.size!==1)return null;
+ // Shared situation text across different intent groups is genuinely ambiguous; do not
+ // force a single natural-language owner. Let the normal deterministic layers handle it.
+ const svc=[...byGroup.values()][0];
+ return {status:'answer',items:[{service:svc,score:10040}],reason:'exact_situation',broad:false,total_intents:1,truncated_count:0,multi_source:'curated_exact_situation'};
+}
+
+function keywordOwnSoftTermRoute(query){
+ const raw=String(query||'').trim();
+ // Explicit separators mean the user deliberately enumerated tasks; never absorb the suffix.
+ if(/[,;\n]+|\s+\/\s+/.test(raw))return null;
+ const n=normalizeQuery(raw);if(!n)return null;
+ const candidates=[];
+ for(const svc of services){
+   const titleNorm=normalizeQuery(svc?.title||'');
+   if(!titleNorm||n.length<=titleNorm.length||!n.startsWith(titleNorm))continue;
+   const remainder=n.slice(titleNorm.length);if(!remainder)continue;
+   const ownTerms=(svc.search_terms||[]).map(normalizeQuery).filter(Boolean);
+   if(!ownTerms.includes(remainder))continue;
+   candidates.push({svc,titleNorm,remainder});
+ }
+ if(!candidates.length)return null;
+ candidates.sort((a,b)=>b.titleNorm.length-a.titleNorm.length||a.svc.id.localeCompare(b.svc.id));
+ for(const c of candidates){
+   // A real independent keyword in the suffix must remain a separate intent. This includes
+   // exact titles, aliases, route keywords and explicit broad-policy anchors already owned by
+   // keywordFirstRoute (e.g. '등록금', '장학금').
+   const suffixRoute=keywordFirstRoute(c.remainder);
+   const ownGroup=serviceIntentGroup(c.svc);
+   const conflict=(suffixRoute?.items||[]).some(it=>serviceIntentGroup(it?.service)!==ownGroup);
+   if(conflict)continue;
+   return {status:'answer',items:[{service:c.svc,score:10050}],reason:'keyword_exact',broad:false,total_intents:1,truncated_count:0,multi_source:'keyword_same_service_soft_term'};
+ }
+ return null;
+}
+
+// Keyword + facet ownership guard ------------------------------------------------
+// The search box is keyword-first, but students naturally append attributes such as
+// "연락처", "필요한 서류", "언제까지" or "어디로 가". Those tails are not new
+// administrative intents and must not let fuzzy/natural scoring replace an explicit catalog
+// keyword. We only fall back to the facet-stripped keyword route when the normal resolver is
+// weak or misses. If the normal resolver has exact catalog evidence for the more specific
+// phrase (e.g. "기숙사 신청", "모의 토익 신청", "총학생회 문의"), that result stays.
+const KEYWORD_FACET_TAIL_PATTERNS=[
+ /(?:어디\s*(?:에|로)?\s*(?:문의(?:해|할|하면|해야)?|가(?:면|야|야해|야돼)?|찾아가(?:면|야)?|가야\s*해)?|어디로\s*가)\s*$/i,
+ /(?:전화번호|연락처|전화|문의(?:처|하기|해|할|하면|해야)?|필요한\s*서류|필요\s*서류|준비물|서류|절차|방법|언제까지|언제|기간|비용|수수료|온라인으로|온라인|위치|자격|조건)\s*$/i
+];
+function stripKeywordFacetTailOnce(query){
+ let raw=String(query||'').trim().replace(/[\s,;·/]+$/g,'').trim();
+ for(const re of KEYWORD_FACET_TAIL_PATTERNS){
+   const next=raw.replace(re,'').replace(/[\s,;·/]+$/g,'').trim();
+   if(next!==raw)return next;
+ }
+ return raw;
+}
+function keywordFacetBaseCandidates(query){
+ const original=String(query||'').trim();const out=[];let cur=original;
+ for(let i=0;i<3;i++){
+   const next=stripKeywordFacetTailOnce(cur);if(!next||next===cur)break;
+   cur=next;if(!out.includes(cur))out.push(cur);
+ }
+ // "신청 문의" is a common channel tail. Do not treat bare 신청 as a facet generally;
+ // try this more aggressive form only after at least one true facet tail was removed.
+ if(out.length){
+   const actionTrim=cur.replace(/(?:\s|[,;·/])*신청\s*$/i,'').replace(/[\s,;·/]+$/g,'').trim();
+   if(actionTrim&&actionTrim!==cur&&!out.includes(actionTrim))out.push(actionTrim);
+ }
+ return out;
+}
+function serviceHasExactStrongKeywordEvidence(service,query){
+ const n=normalizeQuery(query);if(!service||!n)return false;
+ const vals=[service.title,...(service.aliases||[]),...(service.route_keywords||[]),...(service.situations||[])];
+ return vals.some(v=>normalizeQuery(v)===n);
+}
+function visibleRouteItems(route){
+ if(!route||route.status!=='answer'||!Array.isArray(route.items))return [];
+ return route.reason==='multi_intent'?route.items.slice(0,5):route.items.slice(0,1);
+}
+function keywordFacetFallbackRoute(query,deterministic){
+ const candidates=keywordFacetBaseCandidates(query);if(!candidates.length)return null;
+ // Never strip a facet-looking word that is actually part of an exact official title at the
+ // end of the user's input. Example: '생활관 입실 절차' is a complete title; treating '절차'
+ // as a generic facet manufactures the broader 생활관 문의 card in multi-keyword searches.
+ // Restrict this protection to exact titles (not broad route keywords such as '시설문의').
+ const qNorm=normalizeQuery(query);
+ const literalForm=v=>String(v||'').normalize('NFKC').toLowerCase().trim().replace(/\s+/g,' ');
+ const qLiteral=literalForm(query);
+ if(visibleRouteItems(deterministic).some(item=>{
+   const svc=item?.service;if(!svc)return false;
+   const titleNorm=normalizeQuery(svc.title||'');
+   if(titleNorm&&qNorm.endsWith(titleNorm))return true;
+   // Registered aliases/route keywords ending in a facet word are also protected when the user
+   // typed that keyword literally. Punctuation-separated constructions such as '시설 · 문의'
+   // do not equal the literal registered keyword '시설문의', so the facet guard can still fix them.
+   return [svc.title,...(svc.aliases||[]),...(svc.route_keywords||[])].some(v=>{
+     const lit=literalForm(v);return lit.length>=2&&qLiteral.endsWith(lit);
+   });
+ }))return null;
+ let fallback=null,base='',usedActionTrim=false;
+ const titleCoverage=text=>{
+   const raw=String(text||'').trim(),whole=KEYWORD_ANCHOR_MAP.get(normalizeQuery(raw));
+   if(whole?.titleOwners?.size)return whole.term.length;
+   let sum=0;
+   for(const seg of keywordTokenSegments(raw)){
+     const hasBoundary=/[^0-9a-z가-힣]/i.test(seg.normalize('NFKC'));
+     const parsed=hasBoundary?keywordParseTokenSegment(seg):keywordParseCompactSegment(seg);
+     if(!parsed)continue;
+     for(const a of parsed)if(a.rec?.titleOwners?.size)sum+=a.term.length;
+   }
+   return sum;
+ };
+ const successful=[];
+ for(let i=0;i<candidates.length;i++){
+   const r=keywordFirstRoute(candidates[i]);
+   if(r?.status==='answer'&&r.items?.length){
+     const rec=KEYWORD_ANCHOR_MAP.get(normalizeQuery(candidates[i]));
+     successful.push({i,route:r,base:candidates[i],exactTitle:Boolean(rec?.titleOwners?.size),titleCoverage:titleCoverage(candidates[i])});
+   }
+ }
+ if(!successful.length)return null;
+ // Prefer the decomposition that preserves the greatest amount of exact official-title text.
+ // On a tie, fewer intents are safer for a facet tail because facets cannot create a new task.
+ const chosen=[...successful].sort((a,b)=>b.titleCoverage-a.titleCoverage||(a.route.items?.length||99)-(b.route.items?.length||99)||a.i-b.i)[0];
+ fallback=chosen.route;base=chosen.base;
+ usedActionTrim=chosen.i===candidates.length-1&&chosen.i>0&&/신청\s*$/i.test(candidates[chosen.i-1]||'');
+ const visible=visibleRouteItems(deterministic),top=visible[0]?.service;
+ // Exact catalog evidence for the original or minimally facet-stripped phrase means the
+ // deterministic resolver found a genuinely more specific card; preserve it.
+ const firstBase=candidates[0]||base;
+ if(top&&visible.length===1&&(serviceHasExactStrongKeywordEvidence(top,query)||serviceHasExactStrongKeywordEvidence(top,firstBase)))return null;
+ // If we had to remove a trailing "신청" as well, preserve a high-confidence action-specific
+ // local result (ROTC 지원·선발, 생활관 입사 신청, etc.). Weak semantic/direct results do not qualify.
+ if(usedActionTrim&&top&&visible.length===1&&fallback.items.slice(0,5).length===1){
+   const baseRec=KEYWORD_ANCHOR_MAP.get(normalizeQuery(base));
+   const baseIsExactTitle=Boolean(baseRec?.titleOwners?.size);
+   const actionSpecificReasons=new Set(['exact_situation','p0_resolver','exact_route_alias','canonical_route_alias','specific','context_priority','context','composite_early','route_keyword','local_natural']);
+   if(!baseIsExactTitle&&actionSpecificReasons.has(deterministic?.reason))return null;
+ }
+ const wanted=new Set(fallback.items.slice(0,5).map(x=>serviceIntentGroup(x.service)));
+ const shown=new Set(visible.map(x=>serviceIntentGroup(x.service)));
+ const covered=[...wanted].every(g=>shown.has(g));
+ const exactVisibleSet=covered&&[...shown].every(g=>wanted.has(g));
+ // If the actually displayed answer has exactly the same intent groups, there is nothing to fix.
+ // A superset is not harmless: a facet-generated false positive can consume one of the five slots.
+ if(exactVisibleSet)return null;
+ // When an extra trailing 신청 had to be removed, a multi-intent resolver may have found a more
+ // specific action workflow for one clause (e.g. 기숙사 신청) while the fallback only knows the
+ // broader object (기숙사). Preserve that result only when a visible card has exact catalog
+ // evidence for one of the pre-action-trim segments and no unexplained extra card was added.
+ if(usedActionTrim&&deterministic?.reason==='multi_intent'){
+   const segments=keywordTokenSegments(firstBase);
+   const missingWanted=[...wanted].filter(g=>!shown.has(g));
+   const nonWanted=visible.filter(item=>!wanted.has(serviceIntentGroup(item.service)));
+   const specificReplacements=nonWanted.length===missingWanted.length&&nonWanted.every(item=>segments.some(seg=>serviceHasExactStrongKeywordEvidence(item.service,seg)));
+   if(specificReplacements&&visible.length===fallback.items.slice(0,5).length)return null;
+ }
+ return {...fallback,multi_source:'keyword_facet',facet_base:base};
 }
 // -------------------------------------------------------------------------------
 
@@ -1613,9 +1803,14 @@ function dedupeRouteIntentItems(route){
   if(!route||route.status!=='answer'||!Array.isArray(route.items)||route.items.length<2)return route;
   const out=[],keyToIndex=new Map();
   const routeKinds=new Set(['official_route','department_route']);
+  // Some canonical base records intentionally omit canonical_id while sibling route records point
+  // to that base ID. Treat a referenced base ID as the same canonical group; otherwise the base
+  // and its route twin can occupy two visible answer slots.
+  const canonicalTargets=new Set(services.map(s=>s?.canonical_id||s?.intent_group).filter(Boolean));
   const identityKey=service=>{
     const canonical=service?.canonical_id||service?.intent_group;
     if(canonical)return `canonical:${canonical}`;
+    if(canonicalTargets.has(service?.id))return `canonical:${service.id}`;
     if(routeKinds.has(service?.kind)){
       const title=normalizeQuery(service?.title||''),dept=normalizeQuery(service?.department?.name||'');
       if(title&&dept)return `route:${title}|${dept}`;
@@ -1624,7 +1819,7 @@ function dedupeRouteIntentItems(route){
   };
   const representativePriority=service=>{
     const canonical=service?.canonical_id||service?.intent_group;
-    if(canonical&&service?.id===canonical)return 0;
+    if((canonical&&service?.id===canonical)||canonicalTargets.has(service?.id))return 0;
     if(service?.kind==='workflow')return 1;
     if(service?.kind==='official_route')return 2;
     if(service?.kind==='department_route')return 3;
@@ -1659,10 +1854,24 @@ function isWrappedCanonicalTitleQuery(query){
  return services.some(s=>cores.has(normalizeQuery(s.title||'')));
 }
 function searchCampusServices(query,metaGuard=false){
+  // A unique curated natural-language situation may resolve the whole sentence only when
+  // it is not itself a registered strong keyword and has no explicit multi-intent separator.
+  // This restores the intended natural-language context layer without weakening keyword-first.
+  const exactSituation=exactSituationPriorityRoute(query);
+  if(exactSituation)return dedupeRouteIntentItems(exactSituation);
   // Keyword mode is the product's primary contract. Run it on the untouched input before
   // natural-language clause cleanup so separators that are part of official titles (·, /, &)
   // cannot destroy an otherwise exact 1~5 keyword enumeration.
-  const keywordLocked=keywordFirstRoute(query);if(keywordLocked)return dedupeRouteIntentItems(keywordLocked);
+  const sameServiceSoft=keywordOwnSoftTermRoute(query);
+  if(sameServiceSoft)return dedupeRouteIntentItems(sameServiceSoft);
+  const keywordLocked=keywordFirstRoute(query);
+  if(keywordLocked){
+    // A trailing facet can make the token parser backtrack from one long exact title into
+    // shorter unrelated anchors (e.g. ...·시설 + 문의). Audit the lock against the
+    // facet-stripped keyword ownership before freezing it.
+    const facetAdjusted=keywordFacetFallbackRoute(query,keywordLocked);
+    return dedupeRouteIntentItems(facetAdjusted||keywordLocked);
+  }
   // A punctuation/conjunction fragment can be only a follow-up facet of the preceding task,
   // not another administrative intent: "휴학하고 싶어. 어디로 가면 될까".
   // Remove those dependent tails before the deterministic whole-query scorer sees them.
@@ -1677,6 +1886,8 @@ function searchCampusServices(query,metaGuard=false){
     }
   }
   const deterministic=dedupeRouteIntentItems(searchCampusServicesRaw(effectiveQuery,metaGuard));
+  const facetKeyword=keywordFacetFallbackRoute(query,deterministic);
+  if(facetKeyword)return dedupeRouteIntentItems(facetKeyword);
   if(deterministic?.status==='answer'&&(deterministic.items||[]).length)return deterministic;
   // Tail cleanup can occasionally remove the action from colloquial wording (e.g. 학교 카드 + 다시 받다).
   // Only after a deterministic miss do we retry the original sentence with the local concept resolver.
@@ -2339,6 +2550,9 @@ function renderUnresolvedNotice(clauses=[]){
 function renderResultLimitNotice(route){const hidden=Math.max(0,Number(route?.truncated_count)||0);if(!hidden)return;const host=$('#resultSummary');if(!host)return;const box=document.createElement('section');box.className='unresolved-notice result-limit-notice';const b=document.createElement('b');b.textContent='한 번에 최대 5개 업무까지 안내해요.';const p=document.createElement('p');p.textContent=`입력에서 ${Number(route?.total_intents)||5+hidden}개의 독립 업무를 찾았어요. 나머지 ${hidden}개는 별도로 검색해주세요.`;box.append(b,p);host.appendChild(box);}
 function shouldAssistMissingOnly(query,route){
   if(location.protocol==='file:'||!route||route.status!=='answer'||!(route.items||[]).length)return false;
+  // A catalog-backed keyword lock is final. Gemini must never audit, add to, or reinterpret
+  // explicit 1~5 keyword results, including facet-restored keyword routes.
+  if(route.reason==='keyword_exact'||String(route.multi_source||'').startsWith('keyword_'))return false;
   // Keep the deterministic engine authoritative when it already resolves the query.
   // Gemini is only a fallback for explicit clauses that the existing engine could not resolve.
   const unresolved=findUnresolvedClauses(query);
