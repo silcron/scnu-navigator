@@ -2225,23 +2225,66 @@ function createServiceCard(item, isPrimary=false){
   return node;
 }
 
-function renderAlternatives(items){
-  const primary=items[0]?.service;
-  const seen=new Set(primary?[primary.title]:[]);
-  const candidates=[];
-  for(const item of items.slice(1)){
-    if(seen.has(item.service.title))continue;
-    seen.add(item.service.title);candidates.push(item);
-    if(candidates.length>=5)break;
+function relatedRecommendationItems(query, primaryService, alreadyShown=[], limit=5){
+  if(!primaryService)return [];
+  const excludedIds=new Set((alreadyShown||[]).map(x=>x?.service?.id).filter(Boolean));
+  excludedIds.add(primaryService.id);
+  const identity=s=>s?.canonical_id||s?.intent_group||s?.id||'';
+  const excludedGroups=new Set((alreadyShown||[]).map(x=>identity(x?.service)).filter(Boolean));
+  excludedGroups.add(identity(primaryService));
+  const primaryEntry=SEARCH_INDEX.find(e=>e.service.id===primaryService.id);
+  const primaryTokens=primaryEntry?.tokenSet||new Set();
+  const dept=normalizeQuery(primaryService.department?.name||'');
+  const category=normalizeQuery(primaryService.category||'');
+  const domain=primaryService.domain||'';
+  const concept=detectConcept(query);
+  const loose=loosenQuery(query);
+  const ranked=[];
+  for(const e of SEARCH_INDEX){
+    const s=e.service;
+    if(!s||excludedIds.has(s.id)||excludedGroups.has(identity(s)))continue;
+    const sameCategory=Boolean(category&&normalizeQuery(s.category||'')===category);
+    const sameDomain=Boolean(domain&&s.domain===domain);
+    const sameDept=Boolean(dept&&normalizeQuery(s.department?.name||'')===dept);
+    const qScore=Math.max(scoreSearchEntry(e,query,concept),loose&&loose!==query?scoreSearchEntry(e,loose,concept):0);
+    let shared=0;
+    for(const t of e.tokenSet||[]){if(primaryTokens.has(t)&&!GENERIC_SEARCH_TERMS.has(t)&&!QUERY_STOP_WORDS.has(t))shared++;}
+    const deptRelevant=sameDept&&qScore>=700;
+    const domainRelevant=sameDomain&&qScore>=900;
+    const strongQueryRelation=qScore>=1400;
+    if(!(sameCategory||deptRelevant||domainRelevant||strongQueryRelation))continue;
+    let score=qScore;
+    if(sameCategory)score+=1800;
+    if(sameDomain)score+=700;
+    if(sameDept)score+=420;
+    score+=Math.min(shared,4)*280;
+    if(s.kind==='department_route')score-=180;
+    if(s.browse_hidden)score-=250;
+    ranked.push({service:s,score});
   }
-  if(!candidates.length)return null;
+  ranked.sort((a,b)=>b.score-a.score||a.service.title.localeCompare(b.service.title,'ko'));
+  const out=[],seenTitles=new Set(),seenGroups=new Set();
+  for(const item of ranked){
+    const title=normalizeQuery(item.service.title||'');
+    const group=identity(item.service);
+    if(!title||seenTitles.has(title)||seenGroups.has(group))continue;
+    seenTitles.add(title);seenGroups.add(group);out.push(item);
+    if(out.length>=limit)break;
+  }
+  return out;
+}
+
+function renderAlternatives(primaryItem,candidates=[]){
+  const primary=primaryItem?.service;
+  if(!primary||!candidates.length)return null;
   const wrap = document.createElement('aside');wrap.className = 'alternatives';
   const h=document.createElement('h3');h.textContent='관련 업무';wrap.appendChild(h);
-  const p=document.createElement('p');p.textContent='입력한 키워드와 가까운 다른 업무도 함께 확인해보세요.';wrap.appendChild(p);
+  const p=document.createElement('p');p.textContent='검색 결과와 함께 확인하면 좋은 관련 업무예요.';wrap.appendChild(p);
   const list = document.createElement('div');list.className = 'alt-list';
-  candidates.forEach(item=>{
+  candidates.slice(0,5).forEach(item=>{
     const b = document.createElement('button');b.className = 'alt-card';b.type = 'button';
-    const small=document.createElement('small');small.textContent=item.service.category;
+    const dept=item.service.department?.name||'공식 부서 확인';
+    const small=document.createElement('small');small.textContent=`${item.service.category} · ${dept}`;
     const strong=document.createElement('b');strong.textContent=item.service.title;
     const desc=document.createElement('span');desc.textContent=item.service.description||'';
     b.append(small,strong,desc);b.addEventListener('click',()=>showSpecific(item));list.appendChild(b);
@@ -2427,7 +2470,9 @@ function renderSearchResult(q,route,ms=0){
        : `“${q}”에 가장 가까운 공식 업무예요.`;
    grid.appendChild(createServiceCard(items[0],true));
    startClarificationQueue([items[0].service]);
-   if(items.length>1){const alt=renderAlternatives(items);if(alt)grid.appendChild(alt);}
+   const recommendations=relatedRecommendationItems(q,items[0].service,items,5);
+   const alt=renderAlternatives(items[0],recommendations);
+   if(alt)grid.appendChild(alt);else grid.style.gridTemplateColumns='1fr';
  }
  $('#resultHeading').setAttribute('tabindex','-1');$('#resultHeading').focus({preventScroll:true});
  window.scrollTo({top:$('#searchState').offsetTop-35,behavior:'smooth'});
