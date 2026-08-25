@@ -10,7 +10,7 @@ const RECENT_SEARCH_KEY = 'eodiga_recent_searches_v2';
 const CHECK_STATE_KEY = 'eodiga_check_state_v2';
 const DATA_CACHE_VERSION = '5.4.1';
 const classifierCache = new Map();
-const CLASSIFIER_CACHE_STORAGE_KEY = 'eodiga_classifier_cache_v7210';
+const CLASSIFIER_CACHE_STORAGE_KEY = 'eodiga_classifier_cache_v731';
 const CLASSIFIER_CACHE_LIMIT = 30;
 const CAMPUS_MAP_URL = 'https://www.scnu.ac.kr/SCNU/cm/cntnts/cntntsView.do?cntntsId=1046&mi=1182';
 
@@ -207,6 +207,8 @@ function compositeRouteId(query){
 }
 
 let SEARCH_INDEX=[];
+let KEYWORD_ANCHOR_MAP=new Map();
+let KEYWORD_ANCHORS=[];
 let SEARCH_DF=new Map();
 let SEARCH_DOC_COUNT=0;
 let pendingClarificationIds=[];
@@ -297,6 +299,7 @@ function buildSearchIndex(){
  });
  SEARCH_DOC_COUNT=SEARCH_INDEX.length;SEARCH_DF=new Map();
  for(const e of SEARCH_INDEX)for(const t of e.tokenSet)SEARCH_DF.set(t,(SEARCH_DF.get(t)||0)+1);
+ buildKeywordAnchorIndex();
 }
 function detectConcept(q){
  const norms=[normalizeQuery(q),normalizeQuery(loosenQuery(q))].filter(Boolean);let best=null;
@@ -481,12 +484,171 @@ function strongRouteKeywordMatches(q){
  return out.sort((a,b)=>b.score-a.score||a.service.id.localeCompare(b.service.id));
 }
 
+
+// v7.3 keyword-first resolver ----------------------------------------------------
+// The product's primary contract is exact/compact keyword routing. Natural-language
+// interpretation is a convenience layer only and must never overwrite catalog-backed
+// keywords that the user explicitly typed.  This resolver therefore activates only when
+// catalog anchors cover the complete normalized input (apart from separators).  Longest
+// spans win, so compound keywords such as "창업휴학" are never split into "창업 + 휴학".
+const KEYWORD_BROAD_PREFERRED_IDS={
+ '장학':['scholarship_guide'],'장학금':['scholarship_guide'],
+ '기숙사':['route_dorm_general'],'생활관':['route_dorm_general'],'학생생활관':['route_dorm_general'],
+ '동아리':['central_club_info'],'비교과':['extracurricular'],
+ '퇴실':['dorm_move_out'],'입실':['dorm_move_in'],'기숙사퇴실':['dorm_move_out'],'생활관퇴실':['dorm_move_out'],
+ '제적':['dismissal'],'계절학기':['seasonal'],'육아휴학':['leave_parental'],
+ '실내체육관':['gym'],'학생상해보험':['route_student_health_insurance'],
+ '외국어교육':['language_program'],'수강내역확인':['course_check'],'수강신청정정':['course_change'],
+ '교원자격증':['teacher_cert_reissue'],
+ '휴학':['leave_general'],'일반휴학':['leave_general'],'병역휴학':['leave_military'],'군휴학':['leave_military'],'창업휴학':['leave_startup'],
+ '복학':['return'],'자퇴':['withdrawal'],'재입학':['readmission'],
+ '전과':['major_transfer'],'복수전공':['double_major'],'부전공':['minor'],
+ '수강신청':['course_registration'],'성적정정':['grade_correction_period'],
+ '성적증명서':['cert_transcript'],'재학증명서':['cert_enroll'],'졸업증명서':['cert_graduation'],
+ '국가장학금':['sch_national'],'학자금대출':['student_loan'],'학생증재발급':['student_id_reissue'],
+ '보건소':['health_clinic'],'분실물':['lost_item_board'],'학교차량':['school_vehicle'],
+ 'rotc':['rotc_info'],'학군단':['rotc_info'],'통학버스':['shuttle'],'셔틀':['shuttle'],
+ '향림통':['hyanglim'],'e캠퍼스':['ecampus'],'ecampus':['ecampus'],'오피스365':['office365'],'office365':['office365'],
+ '모의토익':['international_topik_language'],'aura':['ai_bootcamp_platforms'],
+ '정보공개':['general_information_disclosure'],'등록금':['tuition_payment'],'등록금납부':['tuition_payment'],
+ '취업상담':['route_career_clinic'],'진로상담':['career_counsel'],'심리상담':['personal_counsel'],'인권침해':['human_rights_contact'],
+ '교환학생':['international_exchange_contact'],'유학생비자':['route_intl_visa'],'교직':['teacher_course'],
+ 'irb':['route_bioethics'],'연구윤리':['route_research_ethics'],'창업지원':['startup_center_general'],'발전기금':['route_fund_general']
+}
+const KEYWORD_AMBIGUOUS_IDS={
+ '대출':['student_loan','route_library_borrow'],
+ '추가모집':['admission_early_v4','dorm_additional_application'],
+ '냉난방':['route_fac_mechanical','dorm_hvac'],
+ '상담':['personal_counsel','career_counsel','admission_counsel_general','dorm_counsel','human_rights_contact']
+};
+const KEYWORD_ANCHOR_STOP=new Set(['신청','문의','안내','이용','예약','확인','상담','지원','관리','조회','변경','취소','등록','발급','처리','담당','업무','학교','학생','관련']);
+function buildKeywordAnchorIndex(){
+ KEYWORD_ANCHOR_MAP=new Map();
+ const add=(raw,id,source)=>{
+   const term=normalizeQuery(raw);if(!term||term.length<2||KEYWORD_ANCHOR_STOP.has(term))return;
+   let rec=KEYWORD_ANCHOR_MAP.get(term);if(!rec){rec={term,owners:new Set(),titleOwners:new Set(),routeOwners:new Set(),aliasOwners:new Set(),policyOwners:new Set()};KEYWORD_ANCHOR_MAP.set(term,rec);}
+   rec.owners.add(id);const bucket=source==='title'?rec.titleOwners:source==='route'?rec.routeOwners:source==='alias'?rec.aliasOwners:rec.policyOwners;bucket.add(id);
+ };
+ for(const s of services){
+   add(s.title,s.id,'title');
+   for(const x of (s.aliases||[]))add(x,s.id,'alias');
+   for(const x of (s.route_keywords||[]))add(x,s.id,'route');
+ }
+ // Deliberately use a small canonical keyword policy instead of expanding every SEARCH_CONCEPTS
+ // alias to every preferred service. The latter is useful for fuzzy natural language but is too
+ // broad for exact keyword mode (e.g. SW중심대학사업단 must not expand to every AI program).
+ for(const [term,ids] of Object.entries({...KEYWORD_BROAD_PREFERRED_IDS,...KEYWORD_AMBIGUOUS_IDS}))for(const id of ids)if(services.some(s=>s.id===id))add(term,id,'policy');
+ KEYWORD_ANCHORS=[...KEYWORD_ANCHOR_MAP.values()].sort((a,b)=>b.term.length-a.term.length||a.term.localeCompare(b.term));
+}
+function keywordRepresentativeIds(rec){
+ const n=rec.term;
+ // An exact official title
+ if(rec.titleOwners.size){
+   const exact=[...rec.titleOwners].filter(id=>services.some(s=>s.id===id));
+   if(exact.length)return exact;
+ }
+ const policy=KEYWORD_BROAD_PREFERRED_IDS[n]||KEYWORD_AMBIGUOUS_IDS[n];
+ if(policy)return policy.filter(id=>services.some(s=>s.id===id));
+ // An exact official title is the strongest possible keyword evidence. Never let shorter route
+ // aliases or generic concepts consume result slots ahead of it.
+ const primary=rec.titleOwners.size?rec.titleOwners:(rec.routeOwners.size?rec.routeOwners:(rec.aliasOwners.size?rec.aliasOwners:rec.owners));
+ const list=[...primary].map(id=>services.find(s=>s.id===id)).filter(Boolean);
+ if(!list.length)return [];
+ const byGroup=new Map();
+ for(const svc of list){const group=serviceIntentGroup(svc);const prev=byGroup.get(group);if(!prev||svc.id===group)byGroup.set(group,svc);}
+ return [...byGroup.values()].sort((a,b)=>{
+   const pr={workflow:0,official_route:1,department_route:2,academic_directory_general:3,academic_directory:4,organization_registry:5};
+   return (pr[a.kind]??2)-(pr[b.kind]??2)||a.id.localeCompare(b.id);
+ }).map(s=>s.id);
+}
+function keywordTokenSegments(query){
+ // Comma/semicolon/newline/slash are explicit keyword separators for the search-box contract.
+ // A complete official title that itself contains '/' is protected in keywordFirstRoute before
+ // this splitter runs, so ordinary multi-keyword input such as '휴학 / 장학금' cannot be fused
+ // into a different compound workflow across the slash boundary.
+ return String(query||'').split(/[,;\n]+|\s+\/\s+/).map(x=>x.trim()).filter(Boolean);
+}
+function keywordParseTokenSegment(segment){
+ const toks=String(segment||'').normalize('NFKC').toLowerCase().replace(/[^0-9a-z가-힣]+/g,' ').split(/\s+/).map(normalizeQuery).filter(Boolean);
+ if(!toks.length)return null;
+ const memo=new Map();
+ const solve=i=>{
+   if(i===toks.length)return [];
+   if(memo.has(i))return memo.get(i);
+   // Longest complete token span first: an actual compound title/keyword outranks splitting it
+   // into generic inner words, while matches are never allowed to begin/end inside another token.
+   for(let j=toks.length;j>i;j--){
+     const term=toks.slice(i,j).join('');const rec=KEYWORD_ANCHOR_MAP.get(term);if(!rec)continue;
+     const tail=solve(j);if(tail){const ans=[{term,rec},...tail];memo.set(i,ans);return ans;}
+   }
+   memo.set(i,null);return null;
+ };
+ return solve(0);
+}
+function keywordParseCompactSegment(segment){
+ const n=normalizeQuery(segment);if(!n)return null;
+ // Compact input has no visible token boundaries, so segment it strictly from left to right.
+ // Never allow an anchor to begin in the middle of a previously intended keyword (e.g.
+ // 교환학생+생활관 must not manufacture 학생생활관 across the boundary). Try longer anchors
+ // first, but backtrack when that choice cannot cover the remainder.
+ const byStart=new Map();
+ for(const rec of KEYWORD_ANCHORS){
+   let from=0;while(from<n.length){const idx=n.indexOf(rec.term,from);if(idx<0)break;if(!byStart.has(idx))byStart.set(idx,[]);byStart.get(idx).push(rec);from=idx+1;}
+ }
+ for(const arr of byStart.values())arr.sort((a,b)=>b.term.length-a.term.length||a.term.localeCompare(b.term));
+ const memo=new Map();
+ const solve=i=>{
+   if(i===n.length)return [];
+   if(memo.has(i))return memo.get(i);
+   for(const rec of (byStart.get(i)||[])){
+     const tail=solve(i+rec.term.length);
+     if(tail){const ans=[{term:rec.term,rec},...tail];memo.set(i,ans);return ans;}
+   }
+   memo.set(i,null);return null;
+ };
+ return solve(0);
+}
+function keywordFirstRoute(query){
+ const raw=String(query||'').trim();if(!normalizeQuery(raw)||!KEYWORD_ANCHORS.length)return null;
+ // Protect a complete official title before interpreting '/' as a multi-keyword separator.
+ // This preserves titles such as 'AI부트캠프 교육과정 · 네이버/메가존클라우드'.
+ const wholeRec=KEYWORD_ANCHOR_MAP.get(normalizeQuery(raw));
+ if(wholeRec?.titleOwners?.size){
+   const wholeIds=keywordRepresentativeIds(wholeRec);
+   if(wholeIds.length){
+     const items=wholeIds.slice(0,5).map((id,i)=>({service:services.find(s=>s.id===id),score:10000-i})).filter(x=>x.service);
+     if(items.length)return {status:'answer',items,reason:items.length>1?'multi_intent':'keyword_exact',broad:items.length>1,total_intents:wholeIds.length,truncated_count:Math.max(0,wholeIds.length-5),multi_source:'keyword_exact_title'};
+   }
+ }
+ const segments=keywordTokenSegments(raw);if(!segments.length)return null;
+ const parsed=[];
+ for(const seg of segments){
+   const hasBoundary=/[^0-9a-z가-힣]/i.test(seg.normalize('NFKC'));
+   const anchors=hasBoundary?keywordParseTokenSegment(seg):keywordParseCompactSegment(seg);
+   if(!anchors||!anchors.length)return null;
+   parsed.push(...anchors);
+ }
+ const ids=[];const seenGroups=new Set();
+ for(const anchor of parsed){
+   const reps=keywordRepresentativeIds(anchor.rec);
+   for(const id of reps){const svc=services.find(s=>s.id===id);if(!svc)continue;const group=serviceIntentGroup(svc);if(seenGroups.has(group))continue;seenGroups.add(group);ids.push(id);}
+ }
+ if(!ids.length)return null;
+ const items=ids.slice(0,5).map((id,i)=>({service:services.find(s=>s.id===id),score:10000-i})).filter(x=>x.service);
+ return {status:'answer',items,reason:items.length>1?'multi_intent':'keyword_exact',broad:items.length>1,total_intents:ids.length,truncated_count:Math.max(0,ids.length-5),multi_source:'keyword_first'};
+}
+// -------------------------------------------------------------------------------
+
 function isObviousNonCampus(q){
  const n=normalizeQuery(q);
  if(n.includes('연애')&&n.includes('상담')&&!['순천대','학교','교내','학생상담','상담센터'].some(x=>n.includes(normalizeQuery(x))))return true;
+ // Explicit non-campus card products are not student-ID or campus-lost-item requests unless the
+ // user also gives a campus context. Bare '카드 잃어버렸어' remains a student-ID convenience alias.
+ const explicitAcademicContext=['순천대','순천대학교','국립순천대학교','학교','교내','캠퍼스','대학','학업','휴학','복학','수강','학생'].some(x=>n.includes(normalizeQuery(x)));
+ const explicitExternalCard=['신용카드','체크카드','은행카드','카드사','법인카드','교통카드','하이패스카드','멤버십카드','포인트카드'].some(x=>n.includes(normalizeQuery(x)));
+ if(explicitExternalCard&&!explicitAcademicContext)return true;
  // Explicit employment/life context must not be reinterpreted as a university leave request merely because it contains '한 학기 쉬고 싶어'.
  const explicitWorkContext=['회사','직장','직장에서','회사에서','출근','퇴근','연차','휴가','퇴사','알바','아르바이트'].some(x=>n.includes(normalizeQuery(x)));
- const explicitAcademicContext=['순천대','순천대학교','국립순천대학교','학교','교내','캠퍼스','대학','학업','휴학','복학','수강','학생'].some(x=>n.includes(normalizeQuery(x)));
  if(explicitWorkContext&&!explicitAcademicContext&&(n.includes('쉬고싶')||n.includes('쉬어야')||n.includes('한학기쉬')||n.includes('잠깐쉬')))return true;
  if(n.includes('유튜브')&&['뭐봐','뭐볼까','볼만한','추천'].some(x=>n.includes(normalizeQuery(x)))&&!['순천대','학교','교내','대학','홍보'].some(x=>n.includes(normalizeQuery(x))))return true;
  const recommendationObjects=['맛집','야식','배달','음식','메뉴','선물','노래','음악','영화','드라마','웹툰','소설','유튜브','영상','여행지','여행코스','카페','게임','노트북','컴퓨터','이어폰','휴대폰','핸드폰','멀티탭','책','도서','아이디어','단톡','이름추천','방꾸미기','꾸미기','옷','의상','꽃다발','슬로건','자취방'];
@@ -1183,7 +1345,7 @@ function localNaturalRouteId(query){
   if(campus&&/(행사|견학|현장학습|워크숍)/i.test(raw)&&/(버스|차량|차)/i.test(raw)&&LOCAL_NL_ACTION.borrow.test(raw))return 'school_vehicle';
 
   // Certificate paraphrases: identify the status being proved, not merely the generic word "서류".
-  if((/재학|학교.{0,5}다니|대학.{0,5}다니/i.test(raw))&&LOCAL_NL_ACTION.prove.test(raw))return 'cert_enroll';
+  if((/재학|학교.{0,7}(?:다니|다닌|다녀|재학)|대학.{0,7}(?:다니|다닌|다녀|재학)/i.test(raw))&&LOCAL_NL_ACTION.prove.test(raw))return 'cert_enroll';
   if(/졸업/i.test(raw)&&LOCAL_NL_ACTION.prove.test(raw)&&!/(졸업요건|졸업조건|졸업학점|졸업유예)/i.test(raw))return 'cert_graduation';
   if((/성적표|성적.{0,5}(?:증명|서류|종이|문서)/i.test(raw))&&LOCAL_NL_ACTION.prove.test(raw))return 'cert_transcript';
 
@@ -1223,6 +1385,7 @@ function searchCampusServicesRaw(query,metaGuard=false){
  // until after multi-intent discovery so a broad atomic rule cannot swallow a real
  // enumeration such as “휴학도 해야 하고 졸업증명서도 필요해”.
  if(p0&&shouldAlwaysKeepCoreSafety(p0))return p0;
+ const keywordLocked=keywordFirstRoute(q);if(keywordLocked)return keywordLocked;
  // If comma/semicolon-separated chunks are themselves exact official service titles,
  // preserve those service identities before any inner punctuation/anchor decomposition.
  // This prevents official titles containing '·', '/', '&' from being exploded into sub-intents.
@@ -1253,8 +1416,13 @@ function searchCampusServicesRaw(query,metaGuard=false){
  // A high-confidence local object+action interpretation outranks fuzzy catalog decomposition for
  // ordinary single-intent wording. Explicit enumerations and protected relationship workflows still
  // go through the existing multi/atomic logic below.
- if(!p0&&splitMultiIntent(q).length<2&&!hasStrongImplicitMultiCandidate(q)&&!hasExplicitEnumerationSyntax(q)&&!hasStrongAtomicRelationshipSyntax(q)){
-   const localNaturalEarly=localNaturalRoute(q);if(localNaturalEarly)return localNaturalEarly;
+ if(splitMultiIntent(q).length<2&&!hasStrongImplicitMultiCandidate(q)&&!hasExplicitEnumerationSyntax(q)&&!hasStrongAtomicRelationshipSyntax(q)){
+   const localNaturalEarly=localNaturalRoute(q);
+   // A single high-confidence local object+action interpretation may resolve before catalog
+   // co-occurrence expansion when the deterministic core is absent OR independently agrees on
+   // the same service. This prevents one natural intent from being inflated into unrelated cards.
+   const coreId=p0?.items?.[0]?.service?.id,localId=localNaturalEarly?.items?.[0]?.service?.id;
+   if(localNaturalEarly&&(!p0||(coreId&&coreId===localId)))return localNaturalEarly;
  }
  if(!metaGuard){
    const clauseFirst=collectResolvedMultiParts(splitMultiIntent(q));
@@ -1486,6 +1654,10 @@ function isWrappedCanonicalTitleQuery(query){
  return services.some(s=>cores.has(normalizeQuery(s.title||'')));
 }
 function searchCampusServices(query,metaGuard=false){
+  // Keyword mode is the product's primary contract. Run it on the untouched input before
+  // natural-language clause cleanup so separators that are part of official titles (·, /, &)
+  // cannot destroy an otherwise exact 1~5 keyword enumeration.
+  const keywordLocked=keywordFirstRoute(query);if(keywordLocked)return dedupeRouteIntentItems(keywordLocked);
   // A punctuation/conjunction fragment can be only a follow-up facet of the preceding task,
   // not another administrative intent: "휴학하고 싶어. 어디로 가면 될까".
   // Remove those dependent tails before the deterministic whole-query scorer sees them.
@@ -1513,7 +1685,7 @@ function searchCampusServices(query,metaGuard=false){
 
 function classifyRouteConfidence(route,query=''){
   if(!route||route.status!=='answer'||!(route.items||[]).length)return 'low';
-  const highReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','natural_title_inquiry','protected_alias','department_general','exact_situation','p0_resolver','exact_route_alias','canonical_route_alias','specific','exact','context_priority','composite_early','directory_context','multi_intent','local_natural']);
+  const highReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','natural_title_inquiry','protected_alias','department_general','exact_situation','p0_resolver','exact_route_alias','canonical_route_alias','specific','exact','context_priority','composite_early','directory_context','multi_intent','local_natural','keyword_exact']);
   const mediumReasons=new Set(['semantic','broad','direct','typo','typo_strong','typo_phrase','official_entity','organization_typo','academic_directory','academic_directory_intent','academic_directory_explicit','academic_directory_named','credit_broad','academic_directory_broad']);
   if(highReasons.has(route.reason))return 'high';
   if(mediumReasons.has(route.reason))return 'medium';
