@@ -104,12 +104,14 @@ function sanitize(result,candidates,query='',options={}){
       const status=['matched','ambiguous','not_found','out_of_scope'].includes(it?.status)?it.status:'ambiguous';
       const id=String(it?.service_id||'');const span=String(it?.evidence_span||'').trim().slice(0,120);
       const evidenceOk=!span || (nq&&nq.includes(normalize(span)));
-      if(!evidenceOk)continue;
+      // evidence_span is audit metadata, not an authorization boundary. A model can select the
+      // correct catalog ID but quote a slightly non-contiguous phrase; keep the valid ID and simply
+      // discard unverifiable evidence instead of throwing away the classification itself.
       if(status==='matched'){
         if(!validIds.has(id)||!candidateIds.has(id)||excludedIds.has(id))continue;
         if(!ids.includes(id)&&ids.length<maxIds)ids.push(id);
       }
-      statuses.push({status,service_id:status==='matched'?id:null,evidence_span:span||null});
+      statuses.push({status,service_id:status==='matched'?id:null,evidence_span:evidenceOk&&span?span:null});
     }
   }else{
     // Backward-compatible parser for controlled tests/temporary older model responses.
@@ -129,6 +131,7 @@ function sanitize(result,candidates,query='',options={}){
 module.exports=async function handler(req,res){
   res.setHeader?.('Cache-Control','no-store, max-age=0');
   res.setHeader?.('Pragma','no-cache');
+  if(req.method==='GET')return res.status(200).json({status:'ok',configured:Boolean(process.env.GEMINI_API_KEY),model:process.env.GEMINI_MODEL||'gemini-3.7-flash'});
   if(req.method!=='POST')return res.status(405).json({error:'POST only'});
   const origin=req.headers?.origin,host=req.headers?.host;
   if(origin&&host){try{if(new URL(origin).host!==host)return res.status(403).json({error:'forbidden'});}catch(_){return res.status(403).json({error:'forbidden'});}}
@@ -151,7 +154,9 @@ module.exports=async function handler(req,res){
   const candidates=shortlist(classifyText,60);
   const fullCatalog=candidates.length>60;
   const list=candidates.map(x=>fullCatalog
-    ? `${x.s.id} | ${x.s.title} | category=${x.s.category} | dept=${x.s.department?.name||''} | aliases=${(x.s.aliases||x.s.search_terms||[]).slice(0,2).join('/')}`
+    // Novel wording can require the complete catalog. Keep this path intentionally compact so
+    // the free-tier classifier has less input to process and is less likely to hit latency limits.
+    ? `${x.s.id} | ${x.s.title} | category=${x.s.category} | dept=${x.s.department?.name||''}`
     : `${x.s.id} | ${x.s.title} | category=${x.s.category} | kind=${x.s.kind||'unknown'} | domain=${x.s.domain||'unknown'} | group=${intentGroup(x.s)} | aliases=${(x.s.aliases||x.s.search_terms||[]).slice(0,4).join('/') } | examples=${(x.s.situations||[]).slice(0,2).join(' / ')}`
   ).join('\n');
   const prompt=[
@@ -216,7 +221,7 @@ module.exports=async function handler(req,res){
     }
     return retryDelayMs;
   };
-  const requestBody=JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{thinkingConfig:{thinkingLevel:'low'},responseFormat:{text:{mimeType:'APPLICATION_JSON',schema:{type:'object',properties:{intents:{type:'array',maxItems:remainingSlots,items:{type:'object',properties:{status:{type:'string',enum:['matched','ambiguous','not_found','out_of_scope']},service_id:{type:'string'},evidence_span:{type:'string'}},required:['status','service_id','evidence_span'],additionalProperties:false}},confidence:{type:'string',enum:['high','medium','low']},needs_clarification:{type:'boolean'},coverage_complete:{type:'boolean'}},required:['intents','confidence','needs_clarification','coverage_complete'],additionalProperties:false}}}}});
+  const requestBody=JSON.stringify({contents:[{role:'user',parts:[{text:prompt}]}],generationConfig:{thinkingConfig:{thinkingLevel:'low'},responseFormat:{text:{mimeType:'application/json',schema:{type:'object',properties:{intents:{type:'array',maxItems:remainingSlots,items:{type:'object',properties:{status:{type:'string',enum:['matched','ambiguous','not_found','out_of_scope']},service_id:{type:'string'},evidence_span:{type:'string'}},required:['status','service_id','evidence_span'],additionalProperties:false}},confidence:{type:'string',enum:['high','medium','low']},needs_clarification:{type:'boolean'},coverage_complete:{type:'boolean'}},required:['intents','confidence','needs_clarification','coverage_complete'],additionalProperties:false}}}}});
   const endpoint=`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   let upstream=null;
   for(let attempt=1;attempt<=2;attempt++){

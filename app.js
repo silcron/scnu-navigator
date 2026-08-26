@@ -210,6 +210,8 @@ let SEARCH_INDEX=[];
 let KEYWORD_ANCHOR_MAP=new Map();
 let KEYWORD_ANCHORS=[];
 let KEYWORD_ANCHORS_BY_FIRST=new Map();
+let KEYWORD_STRONG_LITERALS_BY_GROUP=new Map();
+let KEYWORD_TITLE_NORMS_BY_GROUP=new Map();
 let EXACT_SITUATION_GROUP_MAP=new Map();
 let SEARCH_DF=new Map();
 let SEARCH_DOC_COUNT=0;
@@ -552,6 +554,19 @@ function buildKeywordAnchorIndex(){
  KEYWORD_ANCHORS=[...KEYWORD_ANCHOR_MAP.values()].sort((a,b)=>b.term.length-a.term.length||a.term.localeCompare(b.term));
  KEYWORD_ANCHORS_BY_FIRST=new Map();
  for(const rec of KEYWORD_ANCHORS){const ch=rec.term[0];if(!KEYWORD_ANCHORS_BY_FIRST.has(ch))KEYWORD_ANCHORS_BY_FIRST.set(ch,[]);KEYWORD_ANCHORS_BY_FIRST.get(ch).push(rec);}
+ // Precompute literal strong expressions per canonical intent group. Facet-tail protection uses
+ // this index so repeated title/route synonyms do not require scanning all 411 services per query.
+ KEYWORD_STRONG_LITERALS_BY_GROUP=new Map();
+ KEYWORD_TITLE_NORMS_BY_GROUP=new Map();
+ const lit=v=>String(v||'').normalize('NFKC').toLowerCase().trim().replace(/\s+/g,' ');
+ for(const svc of services){
+   const group=serviceIntentGroup(svc);if(!group)continue;
+   if(!KEYWORD_STRONG_LITERALS_BY_GROUP.has(group))KEYWORD_STRONG_LITERALS_BY_GROUP.set(group,new Set());
+   if(!KEYWORD_TITLE_NORMS_BY_GROUP.has(group))KEYWORD_TITLE_NORMS_BY_GROUP.set(group,new Set());
+   const bucket=KEYWORD_STRONG_LITERALS_BY_GROUP.get(group),titleBucket=KEYWORD_TITLE_NORMS_BY_GROUP.get(group);
+   const tn=normalizeQuery(svc.title||'');if(tn.length>=2)titleBucket.add(tn);
+   for(const v of [svc.title,...(svc.aliases||[]),...(svc.route_keywords||[])]){const x=lit(v);if(x.length>=2)bucket.add(x);}
+ }
 }
 function keywordRepresentativeIds(rec){
  const n=rec.term;
@@ -658,6 +673,99 @@ function keywordFirstRoute(query){
  return {status:'answer',items,reason:items.length>1?'multi_intent':'keyword_exact',broad:items.length>1,total_intents:ids.length,truncated_count:Math.max(0,ids.length-5),multi_source:'keyword_first'};
 }
 
+// Single broad-keyword collection ------------------------------------------------
+// A generic noun such as "성적", "장학", "증명서", "수강", "기숙사" is not a single
+// administrative task.  The old UI said "관련된 업무를 모아봤어요" but rendered only the
+// first candidate; some generic policy anchors (notably 장학/기숙사/등록금) also collapsed the
+// single-word query to one preferred card before the broad ranker could run.  For a *single*
+// generic keyword only, collect several strongly related catalog services and lock that collection
+// as keyword-first. Multi-keyword input keeps the existing one-keyword-one-intent contract.
+const BROAD_COLLECTION_GENERIC_STOP=new Set(['학교','학생','업무','관련','문의','신청','안내','지원','관리','이용','확인','조회','처리','담당']);
+const BROAD_COLLECTION_EXTRA=new Set(['증명서','수강','휴학','시험','학적','학자금','보건','교통','주차','국제교류','대학원','병무']);
+function broadCollectionFieldRelation(value,needle){
+ const raw=String(value||'').normalize('NFKC').toLowerCase();
+ const normalized=normalizeQuery(raw);if(!normalized||!needle)return 0;
+ if(normalized===needle)return 4;
+ const chunks=raw.split(/[^0-9a-z가-힣]+/).map(normalizeQuery).filter(Boolean);
+ if(chunks.some(x=>x===needle))return 4;
+ if(chunks.some(x=>x.startsWith(needle)||x.endsWith(needle)))return 3;
+ if(normalized.startsWith(needle)||normalized.endsWith(needle))return 2;
+ if(normalized.includes(needle))return 1;
+ return 0;
+}
+function broadCollectionEvidenceScore(service,needle,query){
+ if(!service||!needle)return 0;
+ const titleRaw=String(service.title||''),aliasRaw=service.aliases||[],routeRaw=service.route_keywords||[],termRaw=service.search_terms||[],situationRaw=service.situations||[],categoryRaw=String(service.category||'');
+ const titleRel=broadCollectionFieldRelation(titleRaw,needle);
+ const aliasRel=Math.max(0,...aliasRaw.map(x=>broadCollectionFieldRelation(x,needle)));
+ const routeRel=Math.max(0,...routeRaw.map(x=>broadCollectionFieldRelation(x,needle)));
+ const termRel=Math.max(0,...termRaw.map(x=>broadCollectionFieldRelation(x,needle)));
+ const situationRel=Math.max(0,...situationRaw.map(x=>broadCollectionFieldRelation(x,needle)));
+ const categoryRel=Math.max(0,...categoryRaw.split('·').map(x=>broadCollectionFieldRelation(x,needle)));
+ const concept=detectConcept(query);const preferredIndex=concept?(concept.preferred||[]).indexOf(service.id):-1;
+ const directExact=Math.max(titleRel,aliasRel,routeRel,termRel,categoryRel)>=4;
+ const directEdge=Math.max(titleRel,aliasRel,routeRel,termRel,categoryRel)>=3;
+ // A broad collection must have real lexical ownership. Domain/preferred bonuses may rank an
+ // already-related card, but they must never manufacture candidates that do not mention the keyword
+ // (e.g. 정시 -> 편입, or 전기 -> 발전기금 because the characters happen to occur internally).
+ if(!directExact&&!directEdge)return 0;
+ // Edge-only compounds are useful (봉사장학, 전기공학), but when a concept has a known domain,
+ // reject a different-domain edge collision unless the catalog explicitly marks the service as a
+ // preferred owner. This blocks 교직 -> 교직원수련원 while preserving genuine exact metadata hits.
+ if(!directExact&&directEdge&&concept&&service.domain&&service.domain!==concept.domain&&preferredIndex<0)return 0;
+ let score=0;
+ const titleNormalized=normalizeQuery(titleRaw);
+ if(titleRel===4)score+=22000;else if(titleRel===3)score+=16000;else if(titleRel===2)score+=9000;else if(titleRel===1)score+=1800;
+ // For a generic noun, services whose official title *begins* with that noun are the clearest
+ // user-facing owners (성적증명서, 수강신청, 장학금 종류...). A title that merely mentions the
+ // noun later (편입 ... 성적, 휴학 ... 성적인정) remains related but must not crowd those out.
+ if(titleNormalized.startsWith(needle))score+=12000;
+ if(aliasRel===4)score+=9500;else if(aliasRel===3)score+=6200;else if(aliasRel===2)score+=2600;
+ if(routeRel===4)score+=9000;else if(routeRel===3)score+=6000;else if(routeRel===2)score+=2400;
+ if(termRel===4)score+=4000;else if(termRel===3)score+=2600;else if(termRel===2)score+=1000;
+ if(situationRel===4)score+=1400;else if(situationRel===3)score+=700;
+ if(categoryRel===4)score+=5000;else if(categoryRel===3)score+=3200;
+ if(concept){
+   if(service.domain===concept.domain)score+=1100;
+   if(preferredIndex>=0)score+=Math.max(15000,30000-preferredIndex*2000);
+ }
+ if(service.kind==='workflow')score+=500;
+ else if(service.kind==='department_route'||service.kind==='official_route')score-=350;
+ if(service.browse_hidden)score-=350;
+ if(titleRel>=3)score+=Math.max(0,420-Math.min(normalizeQuery(titleRaw).length,42)*10);
+ return score;
+}
+function broadSingleKeywordCollectionRoute(query){
+ const raw=String(query||'').trim();const n=normalizeQuery(raw);if(!n||BROAD_COLLECTION_GENERIC_STOP.has(n))return null;
+ if(!BROAD_CONCEPTS.has(n)&&!BROAD_COLLECTION_EXTRA.has(n))return null;
+ // This policy is deliberately single-keyword only. Explicit separators/word sequences continue
+ // through keywordFirstRoute so each of the user's 1~5 requested intents keeps its own slot.
+ if(/[,;\n]+|\s+\/\s+/.test(raw))return null;
+ const normalizedWords=raw.normalize('NFKC').toLowerCase().replace(/[^0-9a-z가-힣]+/g,' ').trim().split(/\s+/).filter(Boolean);
+ // Broad collection is a search-box convenience for ONE generic keyword, never a sentence.
+ // Natural wording such as "학생증 잃어버렸어" must continue to the action/object resolver.
+ if(normalizedWords.length!==1)return null;
+ // A complete official title is never broadened. "수강신청", "복학", "성적증명서" etc.
+ // remain exact single workflows even though their words occur in many related records.
+ const exactRec=KEYWORD_ANCHOR_MAP.get(n);
+ if(exactRec?.titleOwners?.size)return null;
+ const ranked=[];
+ for(const service of services){
+   const evidence=broadCollectionEvidenceScore(service,n,raw);
+   if(evidence>=2200)ranked.push({service,score:evidence});
+ }
+ if(ranked.length<2)return null;
+ ranked.sort((a,b)=>b.score-a.score||String(a.service.title||'').length-String(b.service.title||'').length||String(a.service.title||'').localeCompare(String(b.service.title||''),'ko'));
+ const out=[],seenGroups=new Set();let distinctTotal=0;
+ for(const item of ranked){
+   const group=serviceIntentGroup(item.service);if(!group||seenGroups.has(group))continue;
+   seenGroups.add(group);distinctTotal++;
+   if(out.length<7)out.push(item);
+ }
+ if(distinctTotal<2)return null;
+ return {status:'answer',items:out,reason:'broad',broad:true,total_intents:distinctTotal,truncated_count:Math.max(0,distinctTotal-5),multi_source:'keyword_broad_collection'};
+}
+
 function exactSituationPriorityRoute(query){
  const raw=String(query||'').trim(),n=normalizeQuery(raw);if(!n)return null;
  // Explicit separators/conjunctions are deliberate multi-keyword input. In that case the
@@ -693,12 +801,16 @@ function keywordOwnSoftTermRoute(query){
  if(!candidates.length)return null;
  candidates.sort((a,b)=>b.titleNorm.length-a.titleNorm.length||a.svc.id.localeCompare(b.svc.id));
  for(const c of candidates){
-   // A real independent keyword in the suffix must remain a separate intent. This includes
-   // exact titles, aliases, route keywords and explicit broad-policy anchors already owned by
-   // keywordFirstRoute (e.g. '등록금', '장학금').
-   const suffixRoute=keywordFirstRoute(c.remainder);
+   // Only a WHOLE suffix that is itself a registered strong keyword may open a second intent.
+   // Do not recursively split a same-service soft term into shorter inner keywords: that used to
+   // turn e.g. "교내장학금·청소년교육지원장학 청소년교육지원장학" into an extra broad
+   // "장학금 종류 찾기" card merely because the suffix contains the substring "장학".
+   const suffixRec=KEYWORD_ANCHOR_MAP.get(c.remainder);
+   const suffixIds=suffixRec?keywordRepresentativeIds(suffixRec):[];
    const ownGroup=serviceIntentGroup(c.svc);
-   const conflict=(suffixRoute?.items||[]).some(it=>serviceIntentGroup(it?.service)!==ownGroup);
+   const conflict=suffixIds.some(id=>{
+     const svc=services.find(s=>s.id===id);return svc&&serviceIntentGroup(svc)!==ownGroup;
+   });
    if(conflict)continue;
    return {status:'answer',items:[{service:c.svc,score:10050}],reason:'keyword_exact',broad:false,total_intents:1,truncated_count:0,multi_source:'keyword_same_service_soft_term'};
  }
@@ -745,7 +857,7 @@ function serviceHasExactStrongKeywordEvidence(service,query){
 }
 function visibleRouteItems(route){
  if(!route||route.status!=='answer'||!Array.isArray(route.items))return [];
- return route.reason==='multi_intent'?route.items.slice(0,5):route.items.slice(0,1);
+ return (route.reason==='multi_intent'||route.broad)?route.items.slice(0,5):route.items.slice(0,1);
 }
 function keywordFacetFallbackRoute(query,deterministic){
  const candidates=keywordFacetBaseCandidates(query);if(!candidates.length)return null;
@@ -756,16 +868,20 @@ function keywordFacetFallbackRoute(query,deterministic){
  const qNorm=normalizeQuery(query);
  const literalForm=v=>String(v||'').normalize('NFKC').toLowerCase().trim().replace(/\s+/g,' ');
  const qLiteral=literalForm(query);
- if(visibleRouteItems(deterministic).some(item=>{
-   const svc=item?.service;if(!svc)return false;
-   const titleNorm=normalizeQuery(svc.title||'');
-   if(titleNorm&&qNorm.endsWith(titleNorm))return true;
-   // Registered aliases/route keywords ending in a facet word are also protected when the user
-   // typed that keyword literally. Punctuation-separated constructions such as '시설 · 문의'
-   // do not equal the literal registered keyword '시설문의', so the facet guard can still fix them.
-   return [svc.title,...(svc.aliases||[]),...(svc.route_keywords||[])].some(v=>{
-     const lit=literalForm(v);return lit.length>=2&&qLiteral.endsWith(lit);
-   });
+ const deterministicGroups=new Set(visibleRouteItems(deterministic).map(item=>serviceIntentGroup(item?.service)).filter(Boolean));
+ // Dedupe can leave a sibling representative visible even when the user literally ended the query
+ // with another title/route keyword from the same canonical group. Protect every strong catalog
+ // expression owned by the visible group, not just the representative card's own fields. The
+ // precomputed group index keeps this check cheap even across large facet stress corpora.
+ if([...deterministicGroups].some(group=>{
+   // Exact official titles may be compacted by the user, so protect their normalized suffix too.
+   // Aliases/route keywords still require literal punctuation/spacing to avoid turning
+   // constructions such as '시설 · 문의' into a false exact keyword.
+   const titles=KEYWORD_TITLE_NORMS_BY_GROUP.get(group);
+   if(titles)for(const tn of titles)if(qNorm.endsWith(tn))return true;
+   const literals=KEYWORD_STRONG_LITERALS_BY_GROUP.get(group);if(!literals)return false;
+   for(const lit of literals)if(qLiteral.endsWith(lit))return true;
+   return false;
  }))return null;
  let fallback=null,base='',usedActionTrim=false;
  const titleCoverage=text=>{
@@ -802,10 +918,13 @@ function keywordFacetFallbackRoute(query,deterministic){
  // If we had to remove a trailing "신청" as well, preserve a high-confidence action-specific
  // local result (ROTC 지원·선발, 생활관 입사 신청, etc.). Weak semantic/direct results do not qualify.
  if(usedActionTrim&&top&&visible.length===1&&fallback.items.slice(0,5).length===1){
-   const baseRec=KEYWORD_ANCHOR_MAP.get(normalizeQuery(base));
-   const baseIsExactTitle=Boolean(baseRec?.titleOwners?.size);
    const actionSpecificReasons=new Set(['exact_situation','p0_resolver','exact_route_alias','canonical_route_alias','specific','context_priority','context','composite_early','route_keyword','local_natural']);
-   if(!baseIsExactTitle&&actionSpecificReasons.has(deterministic?.reason))return null;
+   const baseN=normalizeQuery(base);
+   const topOwnsBase=Boolean(baseN)&&[top.title,...(top.aliases||[]),...(top.route_keywords||[]),...(top.search_terms||[]),...(top.situations||[])].some(v=>normalizeQuery(v)===baseN);
+   // Preserve an action-specific workflow only when it still explicitly owns the facet-stripped
+   // base keyword. This keeps '기숙사 신청 문의' -> 입사 신청 and 'ROTC 신청 문의' -> 지원,
+   // while preventing '생활관물품 신청방법' from drifting to the unrelated 생활관 입사 workflow.
+   if(topOwnsBase&&actionSpecificReasons.has(deterministic?.reason))return null;
  }
  const wanted=new Set(fallback.items.slice(0,5).map(x=>serviceIntentGroup(x.service)));
  const shown=new Set(visible.map(x=>serviceIntentGroup(x.service)));
@@ -1580,6 +1699,7 @@ function searchCampusServicesRaw(query,metaGuard=false){
  // until after multi-intent discovery so a broad atomic rule cannot swallow a real
  // enumeration such as “휴학도 해야 하고 졸업증명서도 필요해”.
  if(p0&&shouldAlwaysKeepCoreSafety(p0))return p0;
+ const broadKeywordCollection=broadSingleKeywordCollectionRoute(q);if(broadKeywordCollection)return broadKeywordCollection;
  const keywordLocked=keywordFirstRoute(q);if(keywordLocked)return keywordLocked;
  // If comma/semicolon-separated chunks are themselves exact official service titles,
  // preserve those service identities before any inner punctuation/anchor decomposition.
@@ -1854,6 +1974,11 @@ function isWrappedCanonicalTitleQuery(query){
  return services.some(s=>cores.has(normalizeQuery(s.title||'')));
 }
 function searchCampusServices(query,metaGuard=false){
+  // A generic single keyword (성적/장학/증명서/수강/기숙사...) represents a family of
+  // administrative tasks. Collect those tasks before the single-preferred keyword lock, while
+  // keeping multi-keyword input on the existing one-keyword-one-intent path.
+  const broadKeywordCollection=broadSingleKeywordCollectionRoute(query);
+  if(broadKeywordCollection)return dedupeRouteIntentItems(broadKeywordCollection);
   // A unique curated natural-language situation may resolve the whole sentence only when
   // it is not itself a registered strong keyword and has no explicit multi-intent separator.
   // This restores the intended natural-language context layer without weakening keyword-first.
@@ -2547,7 +2672,7 @@ function renderUnresolvedNotice(clauses=[]){
   unique.forEach(c=>{const item=document.createElement('div');item.className='partial-miss-item';const label=document.createElement('span');label.textContent='찾지 못함';const q=document.createElement('strong');q.textContent=`“${c}”`;item.append(label,q);list.appendChild(item);});
   box.appendChild(list);host.appendChild(box);
 }
-function renderResultLimitNotice(route){const hidden=Math.max(0,Number(route?.truncated_count)||0);if(!hidden)return;const host=$('#resultSummary');if(!host)return;const box=document.createElement('section');box.className='unresolved-notice result-limit-notice';const b=document.createElement('b');b.textContent='한 번에 최대 5개 업무까지 안내해요.';const p=document.createElement('p');p.textContent=`입력에서 ${Number(route?.total_intents)||5+hidden}개의 독립 업무를 찾았어요. 나머지 ${hidden}개는 별도로 검색해주세요.`;box.append(b,p);host.appendChild(box);}
+function renderResultLimitNotice(route){const hidden=Math.max(0,Number(route?.truncated_count)||0);if(!hidden)return;const host=$('#resultSummary');if(!host)return;const box=document.createElement('section');box.className='unresolved-notice result-limit-notice';const b=document.createElement('b');const p=document.createElement('p');if(route?.broad&&route?.reason!=='multi_intent'){b.textContent='관련 업무가 많아 최대 5개를 먼저 안내해요.';p.textContent=`“${activeResultQuery}”와 직접 관련도가 높은 업무 5개를 우선 보여드려요. 찾는 내용이 없으면 키워드를 조금 더 구체적으로 입력해주세요.`;}else{b.textContent='한 번에 최대 5개 업무까지 안내해요.';p.textContent=`입력에서 ${Number(route?.total_intents)||5+hidden}개의 독립 업무를 찾았어요. 나머지 ${hidden}개는 별도로 검색해주세요.`;}box.append(b,p);host.appendChild(box);}
 function shouldAssistMissingOnly(query,route){
   if(location.protocol==='file:'||!route||route.status!=='answer'||!(route.items||[]).length)return false;
   // A catalog-backed keyword lock is final. Gemini must never audit, add to, or reinterpret
@@ -2679,11 +2804,16 @@ function renderSearchResult(q,route,ms=0){
    renderResultLimitNotice(route);
    full.forEach(item=>grid.appendChild(createServiceCard(item,true)));
    startClarificationQueue(full.map(item=>item.service));
+ }else if(route.broad&&items.length>=2){
+   const full=items.slice(0,5);
+   $('#resultHeading').textContent=`“${q}”와 관련된 업무를 모아봤어요.`;
+   grid.classList.add('multi-result-grid');
+   renderResultLimitNotice(route);
+   full.forEach(item=>grid.appendChild(createServiceCard(item,true)));
+   startClarificationQueue(full.map(item=>item.service));
  }else{
    $('#resultHeading').textContent=route.reason==='classifier'
      ? '입력 내용을 이렇게 이해했어요.'
-     : route.broad
-     ? `“${q}”와 관련된 업무를 모아봤어요.`
      : route.reason==='semantic'
        ? `“${q}”의 의미와 가까운 공식 업무를 찾았어요.`
        : `“${q}”에 가장 가까운 공식 업무예요.`;
