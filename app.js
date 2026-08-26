@@ -313,6 +313,12 @@ function buildSearchIndex(){
    const g=serviceIntentGroup(s),prev=groups.get(g);if(!prev||s.id===g)groups.set(g,s);
  }
  buildKeywordAnchorIndex();
+ // Build literal ownership only after the service dataset has loaded. These sets are declared
+ // later in the file but are initialized before init() invokes buildSearchIndex().
+ EXPLICIT_KEYWORD_LITERAL_SET.clear();EXPLICIT_KEYWORD_TOKEN_ROUTE_CACHE.clear();
+ for(const service of services)for(const value of [service.title,...(service.aliases||[]),...(service.route_keywords||[])]){
+   const key=String(value||'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();if(key)EXPLICIT_KEYWORD_LITERAL_SET.add(key);
+ }
 }
 function detectConcept(q){
  const norms=[normalizeQuery(q),normalizeQuery(loosenQuery(q))].filter(Boolean);let best=null;
@@ -764,6 +770,97 @@ function broadSingleKeywordCollectionRoute(query){
  }
  if(distinctTotal<2)return null;
  return {status:'answer',items:out,reason:'broad',broad:true,total_intents:distinctTotal,truncated_count:Math.max(0,distinctTotal-5),multi_source:'keyword_broad_collection'};
+}
+
+
+// Explicit multi-keyword enumeration ------------------------------------------------
+// When students type several independently meaningful campus keywords separated only by spaces
+// or middle dots (e.g. "성적 장학 ROTC 수강 분실"), the whole-query catalog matcher can favor
+// only the strongest internal anchors and silently drop broad keywords. Preserve the product's
+// 1~5 keyword contract by giving each *standalone-resolvable* keyword one result slot in input order.
+// Facet/meta words are intentionally excluded so "휴학 학생증 재발급 어디에 문의" continues
+// through the existing facet/natural-language pipeline rather than manufacturing extra intents.
+const EXPLICIT_KEYWORD_LITERAL_SET=new Set();
+const EXPLICIT_KEYWORD_TOKEN_ROUTE_CACHE=new Map();
+const EXPLICIT_KEYWORD_ENUM_VOCAB=new Set([
+ ...BROAD_CONCEPTS,...BROAD_COLLECTION_EXTRA,
+ 'rotc','학군단','분실','분실물','휴학','복학','자퇴','재입학','전과','다전공','복수전공','부전공','국가장학금','수강신청','성적정정',
+ '재학증명서','성적증명서','졸업증명서','학자금대출','교환학생','보건소','향림통','lms','와이파이','wifi','주차','학생증재발급'
+].map(normalizeQuery));
+const EXPLICIT_KEYWORD_LIST_STOP=new Set([
+ ...BROAD_COLLECTION_GENERIC_STOP,
+ '어디','어디로','어디에','전화','전화번호','연락처','서류','필요서류','필요한서류','준비물','절차','방법','신청방법',
+ '기간','언제','언제까지','비용','온라인','온라인으로','위치','필요','필요한','관련','부서','담당부서','담당자',
+ '납부','발급','재발급','정정','변경','취소','등록','예약','신고','제출','출력','선발','모집'
+].map(normalizeQuery));
+function explicitKeywordTokenOwned(token,route){
+ const n=normalizeQuery(token);if(!n||EXPLICIT_KEYWORD_LIST_STOP.has(n)||!route||route.status!=='answer'||!(route.items||[]).length)return false;
+ if(route.reason==='broad'&&route.multi_source==='keyword_broad_collection')return true;
+ if(route.reason==='keyword_exact'||String(route.multi_source||'').startsWith('keyword_'))return true;
+ const top=visibleRouteItems(route)?.[0]?.service||route.items?.[0]?.service;if(!top)return false;
+ const vals=[top.title,...(top.aliases||[]),...(top.route_keywords||[]),...(top.search_terms||[]),...(top.situations||[]),top.category].map(normalizeQuery).filter(Boolean);
+ // Standalone ownership must be lexical, not merely a fuzzy score. Edge ownership covers useful
+ // generic nouns such as 분실 -> 분실물 while avoiding arbitrary sentence tokens.
+ return vals.some(v=>v===n||v.startsWith(n)||v.endsWith(n));
+}
+function explicitEnumerationRepeatedSameIntent(raw){
+ const locked=keywordFirstRoute(raw);if(!locked||locked.status!=='answer'||!(locked.items||[]).length)return false;
+ const groups=[...new Set((visibleRouteItems(locked)||locked.items||[]).map(x=>serviceIntentGroup(x.service)).filter(Boolean))];
+ if(groups.length!==1)return false;
+ const group=groups[0], compact=normalizeQuery(raw);if(!compact)return false;
+ const strong=[...new Set([...(KEYWORD_STRONG_LITERALS_BY_GROUP.get(group)||[])].map(normalizeQuery).filter(x=>x.length>=2))].sort((a,b)=>b.length-a.length);
+ const titles=new Set([...(KEYWORD_TITLE_NORMS_BY_GROUP.get(group)||[])].map(normalizeQuery).filter(Boolean));
+ if(!strong.length||!titles.size)return false;
+ // A whitespace/middle-dot list may actually be the same canonical workflow repeated through
+ // title/alias/route synonyms (e.g. "생활관 상담 생활관상담 생활관 상담"). The naive token-list
+ // fallback would split the title into generic words (생활관 + 상담) and manufacture unrelated
+ // intents.  Treat it as one intent only when the *entire compact query* can be segmented into
+ // at least two literals owned by the already keyword-locked group and at least one segment is an
+ // exact official title. A single compound title such as "창업 휴학" therefore does not trigger
+ // this guard and can still be interpreted as two explicitly listed keywords.
+ const memo=new Map();
+ const solve=(i,titleUsed)=>{
+   const key=i+'|'+(titleUsed?1:0);if(memo.has(key))return memo.get(key);
+   if(i===compact.length){const r=titleUsed?0:-Infinity;memo.set(key,r);return r;}
+   let best=-Infinity;
+   for(const lit of strong){if(!compact.startsWith(lit,i))continue;const tail=solve(i+lit.length,titleUsed||titles.has(lit));if(Number.isFinite(tail))best=Math.max(best,1+tail);}
+   memo.set(key,best);return best;
+ };
+ return solve(0,false)>=2;
+}
+function explicitKeywordEnumerationRoute(query){
+ const raw=String(query||'').trim();if(!raw||!/[\s·]/.test(raw))return null;
+ // Comma/slash/plus/newline enumerations are already handled by the mature clause parser. This
+ // fallback specifically closes the whitespace/middle-dot gap without changing those paths.
+ if(/[,;，；/＋+&＆|\n]/.test(raw))return null;
+ // Preserve a literal official title/alias/route expression exactly as registered. A visually
+ // separated form such as "창업 · 휴학" is not the same literal as the official title "창업휴학"
+ // and therefore remains an explicit two-keyword enumeration.
+ const rawKey=raw.normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
+ if(EXPLICIT_KEYWORD_LITERAL_SET.has(rawKey))return null;
+ if(explicitEnumerationRepeatedSameIntent(raw))return null;
+ const parts=raw.replace(/[·]+/g,' ').split(/\s+/).map(x=>x.trim()).filter(Boolean);
+ if(parts.length<2||parts.length>12)return null;
+ const prepared=[];
+ for(const part of parts){
+   const n=normalizeQuery(part);if(n.length<2||EXPLICIT_KEYWORD_LIST_STOP.has(n))return null;
+   const rec=KEYWORD_ANCHOR_MAP.get(n);
+   const eligible=EXPLICIT_KEYWORD_ENUM_VOCAB.has(n)||Boolean(rec?.titleOwners?.size)||(n.length>=7&&Boolean(rec&&(rec.routeOwners?.size||rec.aliasOwners?.size||rec.policyOwners?.size)));
+   if(!eligible)return null;
+   prepared.push({part,n});
+ }
+ const out=[],seenGroups=new Set();let resolved=0;
+ for(const {part,n} of prepared){
+   let route=EXPLICIT_KEYWORD_TOKEN_ROUTE_CACHE.get(n);
+   if(!route){route=searchCampusServices(part,true);if(route?.status==='answer')EXPLICIT_KEYWORD_TOKEN_ROUTE_CACHE.set(n,route);}
+   if(!explicitKeywordTokenOwned(part,route))return null;
+   const item=visibleRouteItems(route)?.[0]||route.items?.[0];if(!item?.service)return null;
+   resolved++;
+   const group=serviceIntentGroup(item.service);if(!group||seenGroups.has(group))continue;
+   seenGroups.add(group);out.push({service:item.service,score:10020-out.length,source_keyword:part});
+ }
+ if(resolved!==parts.length||out.length<2)return null;
+ return {status:'answer',items:out.slice(0,5),reason:'multi_intent',broad:true,total_intents:out.length,truncated_count:Math.max(0,out.length-5),multi_source:'keyword_explicit_list'};
 }
 
 function exactSituationPriorityRoute(query){
@@ -1990,6 +2087,17 @@ function searchCampusServices(query,metaGuard=false){
   const sameServiceSoft=keywordOwnSoftTermRoute(query);
   if(sameServiceSoft)return dedupeRouteIntentItems(sameServiceSoft);
   const keywordLocked=keywordFirstRoute(query);
+  if(!metaGuard){
+    const rawParts=String(query||'').trim().replace(/[·]+/g,' ').split(/\s+/).map(x=>x.trim()).filter(Boolean);
+    const lockedCount=Number(keywordLocked?.total_intents)||(keywordLocked?.items||[]).length;
+    // Only invoke the more expensive per-token fallback when the mature keyword parser clearly
+    // did not preserve all visually enumerated tokens. Fully parsed ordinary queries keep the
+    // existing fast path and exact-title behavior.
+    if(rawParts.length>=2&&rawParts.length<=12&&(!keywordLocked||lockedCount<rawParts.length)){
+      const explicitKeywordList=explicitKeywordEnumerationRoute(query);
+      if(explicitKeywordList&&(!keywordLocked||Number(explicitKeywordList.total_intents)>lockedCount))return dedupeRouteIntentItems(explicitKeywordList);
+    }
+  }
   if(keywordLocked){
     // A trailing facet can make the token parser backtrack from one long exact title into
     // shorter unrelated anchors (e.g. ...·시설 + 문의). Audit the lock against the
@@ -2672,7 +2780,7 @@ function renderUnresolvedNotice(clauses=[]){
   unique.forEach(c=>{const item=document.createElement('div');item.className='partial-miss-item';const label=document.createElement('span');label.textContent='찾지 못함';const q=document.createElement('strong');q.textContent=`“${c}”`;item.append(label,q);list.appendChild(item);});
   box.appendChild(list);host.appendChild(box);
 }
-function renderResultLimitNotice(route){const hidden=Math.max(0,Number(route?.truncated_count)||0);if(!hidden)return;const host=$('#resultSummary');if(!host)return;const box=document.createElement('section');box.className='unresolved-notice result-limit-notice';const b=document.createElement('b');const p=document.createElement('p');if(route?.broad&&route?.reason!=='multi_intent'){b.textContent='관련 업무가 많아 최대 5개를 먼저 안내해요.';p.textContent=`“${activeResultQuery}”와 직접 관련도가 높은 업무 5개를 우선 보여드려요. 찾는 내용이 없으면 키워드를 조금 더 구체적으로 입력해주세요.`;}else{b.textContent='한 번에 최대 5개 업무까지 안내해요.';p.textContent=`입력에서 ${Number(route?.total_intents)||5+hidden}개의 독립 업무를 찾았어요. 나머지 ${hidden}개는 별도로 검색해주세요.`;}box.append(b,p);host.appendChild(box);}
+function renderResultLimitNotice(route){const hidden=Math.max(0,Number(route?.truncated_count)||0);if(!hidden)return;const host=$('#resultSummary');if(!host)return;const box=document.createElement('section');box.className='unresolved-notice result-limit-notice';const b=document.createElement('b');const p=document.createElement('p');if(route?.broad&&route?.reason!=='multi_intent'){b.textContent='관련 업무가 많아 최대 5개를 먼저 안내해요.';p.textContent=`“${activeResultQuery}” 관련 업무 중 직접 관련도가 높은 5개를 우선 보여드려요. 찾는 내용이 없으면 키워드를 조금 더 구체적으로 입력해주세요.`;}else{b.textContent='한 번에 최대 5개 업무까지 안내해요.';p.textContent=`입력에서 ${Number(route?.total_intents)||5+hidden}개의 독립 업무를 찾았어요. 나머지 ${hidden}개는 별도로 검색해주세요.`;}box.append(b,p);host.appendChild(box);}
 function shouldAssistMissingOnly(query,route){
   if(location.protocol==='file:'||!route||route.status!=='answer'||!(route.items||[]).length)return false;
   // A catalog-backed keyword lock is final. Gemini must never audit, add to, or reinterpret
