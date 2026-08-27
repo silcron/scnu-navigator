@@ -8,7 +8,7 @@ let searchSequence = 0;
 let activeResultQuery = '';
 const RECENT_SEARCH_KEY = 'eodiga_recent_searches_v2';
 const CHECK_STATE_KEY = 'eodiga_check_state_v2';
-const DATA_CACHE_VERSION = '5.4.8';
+const DATA_CACHE_VERSION = '5.4.16';
 const classifierCache = new Map();
 const CLASSIFIER_CACHE_STORAGE_KEY = 'eodiga_classifier_cache_v731';
 const CLASSIFIER_CACHE_LIMIT = 30;
@@ -511,14 +511,14 @@ function strongRouteKeywordMatches(q){
 // catalog anchors cover the complete normalized input (apart from separators).  Longest
 // spans win, so compound keywords such as "창업휴학" are never split into "창업 + 휴학".
 const KEYWORD_BROAD_PREFERRED_IDS={
- '장학':['scholarship_guide'],'장학금':['scholarship_guide'],
+ '장학':['scholarship_guide'],'장학금':['scholarship_guide'],'국가장학':['sch_national'],
  '기숙사':['route_dorm_general'],'생활관':['route_dorm_general'],'학생생활관':['route_dorm_general'],
  '동아리':['central_club_info'],'비교과':['extracurricular'],
  '퇴실':['dorm_move_out'],'입실':['dorm_move_in'],'기숙사퇴실':['dorm_move_out'],'생활관퇴실':['dorm_move_out'],
  '제적':['dismissal'],'계절학기':['seasonal'],'육아휴학':['leave_parental'],
  '실내체육관':['gym'],'학생상해보험':['route_student_health_insurance'],
- '외국어교육':['language_program'],'수강내역확인':['course_check'],'수강신청정정':['course_change'],
- '교원자격증':['teacher_cert_reissue'],
+ '외국어교육':['language_program'],'수업시간표':['timetable'],'수강내역확인':['course_check'],'수강신청정정':['course_change'],
+ '교원자격증':['route_academic_teacher'],'교사자격증':['route_academic_teacher'],
  '휴학':['leave_general'],'일반휴학':['leave_general'],'병역휴학':['leave_military'],'군휴학':['leave_military'],'창업휴학':['leave_startup'],
  '복학':['return'],'자퇴':['withdrawal'],'재입학':['readmission'],
  '전과':['major_transfer'],'복수전공':['double_major'],'부전공':['minor'],
@@ -528,14 +528,16 @@ const KEYWORD_BROAD_PREFERRED_IDS={
  '보건소':['health_clinic'],'분실물':['lost_item_board'],'학교차량':['school_vehicle'],
  'rotc':['rotc_info'],'학군단':['rotc_info'],'통학버스':['shuttle'],'셔틀':['shuttle'],
  '향림통':['hyanglim'],'e캠퍼스':['ecampus'],'ecampus':['ecampus'],'오피스365':['office365'],'office365':['office365'],
- '모의토익':['international_topik_language'],'aura':['ai_bootcamp_platforms'],
+ '모의토익':['mock_toeic'],'aura':['ai_bootcamp_platforms'],
  '정보공개':['general_information_disclosure'],'등록금':['tuition_payment'],'등록금납부':['tuition_payment'],
- '취업상담':['route_career_clinic'],'진로상담':['career_counsel'],'심리상담':['personal_counsel'],'인권침해':['human_rights_contact'],
- '교환학생':['international_exchange_contact'],'유학생비자':['route_intl_visa'],'교직':['teacher_course'],
+ '취업상담':['career_counsel'],'진로상담':['career_counsel'],'심리상담':['personal_counsel'],'인권침해':['human_rights_contact'],
+ '교환학생':['exchange_student'],'유학생비자':['route_intl_visa'],'교직':['teacher_course'],
  'irb':['route_bioethics'],'연구윤리':['route_research_ethics'],'창업지원':['startup_center_general'],'발전기금':['route_fund_general']
 }
 const KEYWORD_AMBIGUOUS_IDS={
  '대출':['student_loan','route_library_borrow'],
+ '한국장학재단':['scholarship_guide','sch_national','student_loan','sch_blue'],
+ '회계':['route_finance_general','directory_animation_culture','route_grad_record'],
  '추가모집':['admission_early_v4','dorm_additional_application'],
  '냉난방':['route_fac_mechanical','dorm_hvac'],
  '상담':['personal_counsel','career_counsel','admission_counsel_general','dorm_counsel','human_rights_contact']
@@ -574,6 +576,150 @@ function buildKeywordAnchorIndex(){
    for(const v of [svc.title,...(svc.aliases||[]),...(svc.route_keywords||[])]){const x=lit(v);if(x.length>=2)bucket.add(x);}
  }
 }
+function keywordRouteBaseTerm(term=''){
+ let n=normalizeQuery(term);if(!n)return '';
+ // These suffixes describe how a student phrases a route request, not a different task object.
+ // Removing them lets us compare the actual object against a precise workflow title without
+ // hard-coding individual Korean sentences.
+ for(const suffix of ['담당자','담당부서','담당','문의','상담']){
+   const s=normalizeQuery(suffix);if(n.length>=s.length+2&&n.endsWith(s)){n=n.slice(0,-s.length);break;}
+ }
+ return n;
+}
+function samePhoneSpecificWorkflowIds(rec){
+ // Route cards are intentionally broad department umbrellas. Promote a route keyword to a narrower
+ // workflow only when the SAME official phone also has a workflow whose own title/search language
+ // explicitly names the requested task object. A shared department/phone alone is never enough.
+ // This avoids false narrowing such as 생활관물품 -> 생활관 상담 or 주차정기권 -> 연장.
+ if(!rec?.routeOwners?.size||rec.titleOwners?.size)return [];
+ const base=keywordRouteBaseTerm(rec.term);if(base.length<3)return [];
+ // A literal route request such as '학생증담당' or '국제교류문의' asks for the responsible
+ // desk, not for an arbitrary sub-workflow. Preserve the route unless the catalog explicitly
+ // declares the same phrase as a workflow alias (e.g. 수강신청 담당, 복학 담당).
+ const routeRequestSuffix=['담당자','담당부서','담당','문의','상담'].some(x=>rec.term.endsWith(normalizeQuery(x)));
+ if(routeRequestSuffix&&!rec.aliasOwners?.size)return [];
+ const routeSvcs=[...rec.routeOwners].map(id=>services.find(s=>s.id===id)).filter(Boolean);
+ if(!routeSvcs.length)return [];
+ const phoneKeys=value=>{
+   const raw=String(value||'');
+   const hits=raw.match(/0\d{1,2}[- ]?\d{3,4}[- ]?\d{4}/g)||[];
+   const out=new Set(hits.map(normalizeQuery).filter(Boolean));
+   if(!out.size){const fallback=normalizeQuery(raw);if(fallback)out.add(fallback);}
+   return out;
+ };
+ const phoneSet=new Set();for(const s of routeSvcs)for(const key of phoneKeys(s.department?.phone||''))phoneSet.add(key);
+ if(!phoneSet.size)return [];
+ const candidates=[],objectMatches=[];
+ for(const svc of services){
+   if(svc.kind!=='workflow'||svc.browse_hidden)continue;
+   const svcPhones=phoneKeys(svc.department?.phone||'');if(!svcPhones.size||![...svcPhones].some(x=>phoneSet.has(x)))continue;
+   const title=normalizeQuery(svc.title||'');if(!title)continue;
+   const fields=[...(svc.aliases||[]),...(svc.search_terms||[]),...(svc.situations||[])].map(normalizeQuery).filter(Boolean);
+   const titleExact=title===base,titlePrefix=title.startsWith(base),titleContains=title.includes(base);
+   const titleExtra=Math.max(0,title.length-base.length);
+   const fieldExact=fields.some(v=>v===base),fieldPrefix=fields.some(v=>v.length>base.length&&v.startsWith(base));
+   if(fieldExact||titleExact||titleContains)objectMatches.push({svc,title,fieldExact,titleExact,titleContains,titleExtra});
+   const head=base.length>=4?base.slice(0,Math.min(3,base.length-1)):base;
+   const tail=base.length>=4?base.slice(-2):base;
+   const titleSplitMatch=base.length>=4&&titleExtra<=4&&title.includes(head)&&title.includes(tail);
+   // A route keyword may promote to an existing workflow only when the workflow's VISIBLE title
+   // itself names the requested object. Merely sharing a phone or a hidden search term is not enough.
+   // Short visible expansions such as 국가근로->국가근로장학, LMS->e-캠퍼스(LMS),
+   // 열람실->일반열람실 이용 are safe; long branch-specific expansions such as
+   // 사회봉사->사회봉사 교과목 이수 remain on the umbrella route unless the user adds that facet.
+   const shortVisibleMatch=(titlePrefix||titleContains)&&titleExtra<=4;
+   const exactFieldVisibleMatch=fieldExact&&titleContains;
+   if(!(titleExact||shortVisibleMatch||exactFieldVisibleMatch||titleSplitMatch))continue;
+   let score=0;
+   if(titleExact)score+=220;
+   else if(shortVisibleMatch){
+     score+=150-Math.min(40,titleExtra);
+     if(titleExtra<=2)score+=80;else if(titleExtra<=4)score+=30;
+     if(titleContains&&!titlePrefix)score-=8;
+   }
+   if(fieldExact)score+=90;
+   if(fieldPrefix)score+=45;
+   score+=Math.round(diceSimilarity(base,title)*30);
+   candidates.push({svc,score,titleExact,titlePrefix,fieldExact,fieldPrefix});
+ }
+ if(!candidates.length)return [];
+ // A bare keyword can legitimately cover several workflows at the same desk (학생증, 강의평가,
+ // 사회봉사, etc.). Do not arbitrarily pick one branch. Only a single explicit general-guide
+ // workflow may represent such a family; otherwise preserve the umbrella route.
+ if(objectMatches.length>1){
+   // A short suffix is NOT automatically a general workflow. Action words such as '연장' are
+   // short too, and treating them as generic made a bare object (`주차정기권`) collapse to one
+   // arbitrary branch (`주차 정기권 연장`). Only explicitly general/default workflow suffixes
+   // may represent a multi-branch family without an action word from the user.
+   const genericSuffixes=new Set(['','제','수강','안내','문의','상담','정보','정보문의','일반문의','제도','제도찾기','종류찾기','이용','이용안내']);
+   const generic=objectMatches.filter(x=>{
+     if(!x.title.startsWith(base))return /(?:제도찾기|정보문의|일반문의|종류찾기|이용안내)$/u.test(x.title);
+     const suffix=x.title.slice(base.length);
+     return genericSuffixes.has(suffix);
+   });
+   if(generic.length===1)return [generic[0].svc.id];
+   return [];
+ }
+ candidates.sort((a,b)=>b.score-a.score||a.svc.title.length-b.svc.title.length||a.svc.id.localeCompare(b.svc.id));
+ if(candidates.length===1)return [candidates[0].svc.id];
+ // If several workflows share only the parent phrase (e.g. 주차정기권 -> 신규/연장), the keyword
+ // does not choose a branch. Require exact object evidence before narrowing a multi-candidate set.
+ const exact=candidates.filter(x=>x.titleExact||x.fieldExact);
+ if(!exact.length)return [];
+ exact.sort((a,b)=>b.score-a.score||a.svc.title.length-b.svc.title.length||a.svc.id.localeCompare(b.svc.id));
+ if(exact.length===1)return [exact[0].svc.id];
+ // When several sub-actions all repeat the exact field, prefer a clearly shorter general workflow
+ // only if it is essentially the base task itself (e.g. 졸업자격인증제 vs 내역서 출력/제출).
+ const top=exact[0],second=exact[1];
+ const topTitle=normalizeQuery(top.svc.title||''),secondTitle=normalizeQuery(second.svc.title||'');
+ const topExtra=Math.max(0,topTitle.length-base.length),secondExtra=Math.max(0,secondTitle.length-base.length);
+ if(topTitle.startsWith(base)&&topExtra<=2&&secondExtra-topExtra>=3)return [top.svc.id];
+ return [];
+}
+function keywordRouteDisplayTitle(term,service){
+ if(!term||!service||!['official_route','department_route','academic_directory'].includes(service.kind))return null;
+ const base=keywordRouteBaseTerm(term),title=normalizeQuery(service.title||'');if(!base)return null;
+ const rawTitle=String(service.title||'');
+ const dept=normalizeQuery(service.department?.name||'');
+ // Even when an umbrella title literally contains the keyword, a long list of unrelated duties can
+ // look like the wrong result to a student (사회봉사 -> 통학버스·사회봉사·해외봉사..., 열람실 ->
+ // 열람실·그룹스터디실·사물함...). Keep the official route/phone underneath, but focus the visible
+ // label on the user's owned keyword. Preserve cohesive center titles when the department itself
+ // visibly names the same object (e.g. 장애학생지원센터).
+ const umbrellaParts=(rawTitle.match(/·/g)||[]).length;
+ const focusContainedUmbrella=title.includes(base)&&umbrellaParts>=2&&!(dept&&dept.includes(base));
+ if(title.includes(base)&&!focusContainedUmbrella)return null;
+ // Preserve an already-informative umbrella title when the keyword's object is visibly represented
+ // by both its leading and trailing task fragments (생활관물품 -> 생활관 ... 물품,
+ // 장애학생쉼터 -> 장애학생...쉼터). This keeps useful official context instead of shortening it.
+ if(!focusContainedUmbrella&&base.length>=4){
+   const head=base.slice(0,Math.min(3,base.length-1)),tail=base.slice(-2);
+   if(title.includes(head)&&title.includes(tail))return null;
+ }
+ // Common student wording where the official title uses '장애학생' rather than '장애인'.
+ if(base==='장애인'&&title.includes('장애학생'))return null;
+ const raw=(service.route_keywords||[]).find(v=>normalizeQuery(v)===term)||term;
+ let label=String(raw).trim();
+ if(service.kind==='academic_directory'){
+   if(!/(?:학과|학부|전공|스쿨|대학|안내)$/u.test(label))label=`${label} 안내`;
+   return label;
+ }
+ if(/담당$/u.test(label))label=label.replace(/담당$/u,' 담당 문의');
+ else if(!/(?:문의|상담|안내|지원|신청|관리|운영|대관|채용|전형|공고)$/u.test(label))label=`${label} 문의`;
+ return label;
+}
+function keywordResultItem(id,score,term=''){
+ const service=services.find(s=>s.id===id);if(!service)return null;
+ const display_title=keywordRouteDisplayTitle(term,service);
+ let display_description=null;
+ if(display_title&&term&&['official_route','department_route','academic_directory'].includes(service.kind)){
+   const raw=(service.route_keywords||[]).find(v=>normalizeQuery(v)===normalizeQuery(term))||term;
+   display_description=service.kind==='academic_directory'
+     ?`${String(raw).trim()} 관련 소속 학과·전공 공식 안내로 연결합니다.`
+     :`${String(raw).trim()} 관련 공식 담당부서로 연결합니다.`;
+ }
+ return {service,score,...(term?{source_keyword:term}:{}),...(display_title?{display_title}:{}),...(display_description?{display_description}:{})};
+}
 function keywordRepresentativeIds(rec){
  const n=rec.term;
  // An exact official title
@@ -583,9 +729,11 @@ function keywordRepresentativeIds(rec){
  }
  const policy=KEYWORD_BROAD_PREFERRED_IDS[n]||KEYWORD_AMBIGUOUS_IDS[n];
  if(policy)return policy.filter(id=>services.some(s=>s.id===id));
+ if(rec.aliasOwners.size){const alias=[...rec.aliasOwners].filter(id=>services.some(s=>s.id===id));if(alias.length===1)return alias;}
+ const detailed=samePhoneSpecificWorkflowIds(rec);if(detailed.length)return detailed;
  // An exact official title is the strongest possible keyword evidence. Never let shorter route
  // aliases or generic concepts consume result slots ahead of it.
- const primary=rec.titleOwners.size?rec.titleOwners:(rec.routeOwners.size?rec.routeOwners:(rec.aliasOwners.size?rec.aliasOwners:rec.owners));
+ const primary=rec.titleOwners.size?rec.titleOwners:(rec.aliasOwners.size?rec.aliasOwners:(rec.routeOwners.size?rec.routeOwners:rec.owners));
  const list=[...primary].map(id=>services.find(s=>s.id===id)).filter(Boolean);
  if(!list.length)return [];
  const byGroup=new Map();
@@ -596,11 +744,13 @@ function keywordRepresentativeIds(rec){
  }).map(s=>s.id);
 }
 function keywordTokenSegments(query){
- // Comma/semicolon/newline/slash are explicit keyword separators for the search-box contract.
+ // Comma/semicolon/newline/slash and standalone conjunctions are explicit keyword separators for
+ // the search-box contract. This keeps a strong keyword from being handed to the softer natural-
+ // language resolver merely because the student wrote `A 그리고 B` instead of `A, B`.
  // A complete official title that itself contains '/' is protected in keywordFirstRoute before
- // this splitter runs, so ordinary multi-keyword input such as '휴학 / 장학금' cannot be fused
- // into a different compound workflow across the slash boundary.
- return String(query||'').split(/[,;\n]+|\s+\/\s+/).map(x=>x.trim()).filter(Boolean);
+ // this splitter runs. The current catalog has no registered title/alias/route literal containing
+ // standalone 그리고/또한/및/또, so these visible conjunction boundaries are unambiguous.
+ return String(query||'').split(/[,;\n]+|\s+\/\s+|\s+(?:그리고|또한|및|또)\s+/).map(x=>x.trim()).filter(Boolean);
 }
 function keywordParseTokenSegment(segment){
  const toks=String(segment||'').normalize('NFKC').toLowerCase().replace(/[^0-9a-z가-힣]+/g,' ').split(/\s+/).map(normalizeQuery).filter(Boolean);
@@ -650,7 +800,7 @@ function keywordFirstRoute(query){
  if(wholeRec?.titleOwners?.size){
    const wholeIds=keywordRepresentativeIds(wholeRec);
    if(wholeIds.length){
-     const items=wholeIds.slice(0,5).map((id,i)=>({service:services.find(s=>s.id===id),score:10000-i})).filter(x=>x.service);
+     const items=wholeIds.slice(0,5).map((id,i)=>keywordResultItem(id,10000-i,wholeRec.term)).filter(Boolean);
      if(items.length)return {status:'answer',items,reason:items.length>1?'multi_intent':'keyword_exact',broad:items.length>1,total_intents:wholeIds.length,truncated_count:Math.max(0,wholeIds.length-5),multi_source:'keyword_exact_title'};
    }
  }
@@ -669,13 +819,18 @@ function keywordFirstRoute(query){
    if(!anchors||!anchors.length)return null;
    parsed.push(...anchors);
  }
- const ids=[];const seenGroups=new Set();
+ const ids=[];const idTerms=new Map();const seenGroups=new Set();
+ const isMultiAnchor=parsed.length>=2;
  for(const anchor of parsed){
+   // In a multi-keyword query every parsed anchor owns at most one result slot. Ambiguous/broad
+   // anchors may expose multiple candidates when searched alone, but must not consume another
+   // explicitly typed keyword's slot in a 2~5 intent query.
    const reps=keywordRepresentativeIds(anchor.rec);
-   for(const id of reps){const svc=services.find(s=>s.id===id);if(!svc)continue;const group=serviceIntentGroup(svc);if(seenGroups.has(group))continue;seenGroups.add(group);ids.push(id);}
+   const ownedReps=isMultiAnchor?reps.slice(0,1):reps;
+   for(const id of ownedReps){const svc=services.find(s=>s.id===id);if(!svc)continue;const group=serviceIntentGroup(svc);if(seenGroups.has(group))continue;seenGroups.add(group);ids.push(id);if(!idTerms.has(id))idTerms.set(id,anchor.term);}
  }
  if(!ids.length)return null;
- const items=ids.slice(0,5).map((id,i)=>({service:services.find(s=>s.id===id),score:10000-i})).filter(x=>x.service);
+ const items=ids.slice(0,5).map((id,i)=>keywordResultItem(id,10000-i,idTerms.get(id)||'')).filter(Boolean);
  return {status:'answer',items,reason:items.length>1?'multi_intent':'keyword_exact',broad:items.length>1,total_intents:ids.length,truncated_count:Math.max(0,ids.length-5),multi_source:'keyword_first'};
 }
 
@@ -828,47 +983,117 @@ function explicitEnumerationRepeatedSameIntent(raw){
  };
  return solve(0,false)>=2;
 }
-function explicitKeywordEnumerationRoute(query){
+function explicitKeywordEnumerationRoute(query,baseRoute=null){
  const raw=String(query||'').trim();if(!raw||!/[\s·]/.test(raw))return null;
  // Comma/slash/plus/newline enumerations are already handled by the mature clause parser. This
  // fallback specifically closes the whitespace/middle-dot gap without changing those paths.
  if(/[,;，；/＋+&＆|\n]/.test(raw))return null;
- // Preserve a literal official title/alias/route expression exactly as registered. A visually
- // separated form such as "창업 · 휴학" is not the same literal as the official title "창업휴학"
- // and therefore remains an explicit two-keyword enumeration.
+ // Preserve a literal official title/alias/route expression exactly as registered.
  const rawKey=raw.normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
  if(EXPLICIT_KEYWORD_LITERAL_SET.has(rawKey))return null;
  if(explicitEnumerationRepeatedSameIntent(raw))return null;
  const parts=raw.replace(/[·]+/g,' ').split(/\s+/).map(x=>x.trim()).filter(Boolean);
  if(parts.length<2||parts.length>12)return null;
- const prepared=[];
- for(const part of parts){
-   const n=normalizeQuery(part);if(n.length<2||EXPLICIT_KEYWORD_LIST_STOP.has(n))return null;
+ const baseItems=(visibleRouteItems(baseRoute)||baseRoute?.items||[]).filter(x=>x?.service);
+ const rawCollapsed=raw.normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
+ const hasExplicitSpacedDotSeparator=/\s·\s/.test(raw);
+ const literalOwnsPart=(service,token,partIndex)=>{
+   const n=normalizeQuery(token);if(!n||!service)return false;
+   // Only an *actual registered literal substring with the same visible spacing/punctuation* may
+   // protect a token as part of one compound workflow.  This preserves "장애학생 장학" and
+   // "성희롱·성폭력 상담", but deliberately does NOT merge "창업 · 휴학" into "창업휴학"
+   // or swallow a standalone "장학금" merely because "국가장학금" contains those characters.
+   for(const value of [service.title,...(service.aliases||[]),...(service.route_keywords||[])]){
+     const lit=String(value||'').normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();if(!lit||!rawCollapsed.includes(lit))continue;
+     const components=lit.replace(/[^0-9a-z가-힣]+/g,' ').split(/\s+/).map(normalizeQuery).filter(Boolean);
+     // Only a genuinely multi-part registered expression may protect this exact token occurrence.
+    // Match the registered components against the surrounding input parts by position; a later
+    // independently typed token must not be swallowed merely because the same word also appears
+    // inside an earlier compound name (e.g. Grand-ICT연구센터 ... ICT연구센터).
+    if(components.length>=2){
+      for(let ci=0;ci<components.length;ci++){
+        if(components[ci]!==n)continue;
+        const start=partIndex-ci;if(start<0||start+components.length>parts.length)continue;
+        let same=true;for(let j=0;j<components.length;j++){if(normalizeQuery(parts[start+j])!==components[j]){same=false;break;}}
+        if(same)return true;
+      }
+    }
+   }
+   return false;
+ };
+ const ownsToken=(service,token)=>{
+   const n=normalizeQuery(token);if(!n||!service)return false;
+   const vals=[service.title,...(service.aliases||[]),...(service.route_keywords||[]),...(service.search_terms||[]),...(service.situations||[])].map(normalizeQuery).filter(Boolean);
+   return vals.some(v=>v===n||v.startsWith(n)||v.endsWith(n));
+ };
+ const assigned=[];
+ for(let pi=0;pi<parts.length;pi++){
+   const part=parts[pi],n=normalizeQuery(part);if(n.length<2||EXPLICIT_KEYWORD_LIST_STOP.has(n))continue;
+   // A visibly spaced middle dot is an explicit list delimiter (A · B), not punctuation
+   // inside one registered phrase (A·B). Never let a compound literal cross that boundary.
+   const protectedCompound=hasExplicitSpacedDotSeparator?null:baseItems.find(item=>literalOwnsPart(item.service,part,pi));
+   if(protectedCompound){assigned.push({item:protectedCompound,source_keyword:part});continue;}
+   // Preserve a locally proven object+action workflow such as "학생증 재발급" or "수강 정정".
+   // The action token itself is not a separate intent, but it may specialize the preceding broad noun.
+   const next=parts[pi+1],nextN=normalizeQuery(next||'');
+   const actionCompound=nextN&&EXPLICIT_KEYWORD_LIST_STOP.has(nextN)
+     ? baseItems.find(item=>ownsToken(item.service,part)&&ownsToken(item.service,next)) : null;
+   if(actionCompound){assigned.push({item:actionCompound,source_keyword:part});continue;}
+   // Outside a visibly registered compound, each separately typed strong keyword owns one slot.
+   // This is what keeps "성적 · 장학" and "창업 · 휴학" separate even if a compound workflow
+   // such as 성적장학/창업휴학 also exists elsewhere in the catalog.
    const rec=KEYWORD_ANCHOR_MAP.get(n);
-   const eligible=EXPLICIT_KEYWORD_ENUM_VOCAB.has(n)||Boolean(rec?.titleOwners?.size)||(n.length>=7&&Boolean(rec&&(rec.routeOwners?.size||rec.aliasOwners?.size||rec.policyOwners?.size)));
+   const eligible=EXPLICIT_KEYWORD_ENUM_VOCAB.has(n)||Boolean(rec&&(rec.titleOwners?.size||rec.aliasOwners?.size||rec.routeOwners?.size||rec.policyOwners?.size));
    if(!eligible)return null;
-   prepared.push({part,n});
- }
- const out=[],seenGroups=new Set();let resolved=0;
- for(const {part,n} of prepared){
    let route=EXPLICIT_KEYWORD_TOKEN_ROUTE_CACHE.get(n);
    if(!route){route=searchCampusServices(part,true);if(route?.status==='answer')EXPLICIT_KEYWORD_TOKEN_ROUTE_CACHE.set(n,route);}
    if(!explicitKeywordTokenOwned(part,route))return null;
    const item=visibleRouteItems(route)?.[0]||route.items?.[0];if(!item?.service)return null;
-   resolved++;
-   const group=serviceIntentGroup(item.service);if(!group||seenGroups.has(group))continue;
-   seenGroups.add(group);out.push({service:item.service,score:10020-out.length,source_keyword:part});
+   assigned.push({item,source_keyword:part});
  }
- if(resolved!==parts.length||out.length<2)return null;
- return {status:'answer',items:out.slice(0,5),reason:'multi_intent',broad:true,total_intents:out.length,truncated_count:Math.max(0,out.length-5),multi_source:'keyword_explicit_list'};
+ if(!assigned.length)return null;
+ const out=[],seenGroups=new Set();
+ for(const a of assigned){const group=serviceIntentGroup(a.item.service);if(!group||seenGroups.has(group))continue;seenGroups.add(group);out.push({service:a.item.service,score:10020-out.length,source_keyword:a.source_keyword,...(a.item.display_title?{display_title:a.item.display_title}:{}),...(a.item.display_description?{display_description:a.item.display_description}:{})});if(out.length>=5)break;}
+ if(out.length<2)return null;
+ return {status:'answer',items:out,reason:'multi_intent',broad:true,total_intents:seenGroups.size,truncated_count:Math.max(0,seenGroups.size-5),multi_source:'keyword_explicit_list'};
 }
+
+// Explicit separator clause ownership -------------------------------------------------------
+// Commas/semicolons/newlines/spaced slashes and additive conjunctions are deliberate lists.
+// Resolve each clause independently before whole-query natural parsing so a routing facet on
+// one clause cannot erase another already-strong keyword intent. In multi input, each clause
+// consumes at most one visible slot; broad/ambiguous clauses therefore cannot crowd out the rest.
+function explicitSeparatedClauseKeywordRoute(query){
+ const raw=String(query||'').trim();if(!raw)return null;
+ if(!/[,;，；\n]+|\s+\/\s+|\s+·\s+|(?:^|\s)(?:그리고|또한|및|또)(?=\s|$)/.test(raw))return null;
+ let marked=raw.replace(/[,;，；\n]+/g,'|||').replace(/\s+\/\s+/g,'|||').replace(/\s+·\s+/g,'|||').replace(/\s+(?:그리고|또한|및|또)\s+/g,'|||');
+ const parts=marked.split('|||').map(x=>x.trim()).filter(x=>x.length>=2);if(parts.length<2||parts.length>12)return null;
+ const out=[],seen=new Set();
+ const actionReasons=new Set(['p0_resolver','local_natural','exact_situation','exact_route_alias','canonical_route_alias','specific','context_priority','context','composite_early','route_keyword']);
+ for(const part of parts){
+   const bases=[part,...keywordFacetBaseCandidates(part)];
+   let strongBase=false;
+   for(const b of bases){const kr=keywordFirstRoute(b);if(kr?.status==='answer'&&(kr.items||[]).length){strongBase=true;break;}}
+   const r=searchCampusServices(part,true);if(!r||r.status!=='answer'||!(r.items||[]).length)return null;
+   const visible=visibleRouteItems(r);if(!visible.length)return null;
+   const actionN=normalizeQuery(part),actionSpecific=/(신청|지원|재발급|발급|정정|변경|취소|예약|등록|제출|신고)/.test(actionN)&&actionReasons.has(r.reason);
+   if(!strongBase&&!actionSpecific)return null;
+   const item=visible[0],group=serviceIntentGroup(item.service);if(!group)continue;
+   if(seen.has(group))continue;seen.add(group);
+   out.push({service:item.service,score:10040-out.length,source_keyword:part,...(item.display_title?{display_title:item.display_title}:{}),...(item.display_description?{display_description:item.display_description}:{})});
+   if(out.length>=5)break;
+ }
+ if(out.length<2)return null;
+ return {status:'answer',items:out,reason:'multi_intent',broad:true,total_intents:seen.size,truncated_count:Math.max(0,seen.size-5),multi_source:'keyword_explicit_clauses'};
+}
+// -------------------------------------------------------------------------------------------
 
 function exactSituationPriorityRoute(query){
  const raw=String(query||'').trim(),n=normalizeQuery(raw);if(!n)return null;
  // Explicit separators/conjunctions are deliberate multi-keyword input. In that case the
  // keyword-first contract stays authoritative even if the full string happens to resemble
  // a curated natural-language example.
- if(/[,;\n]+|\s+\/\s+|(?:^|\s)(?:그리고|또한|및|또)(?=\s|$)/.test(raw))return null;
+ if(/[,;\n]+|\s+\/\s+|\s+·\s+|(?:^|\s)(?:그리고|또한|및|또)(?=\s|$)/.test(raw))return null;
  // A complete registered title/alias/route/policy keyword is also keyword-first ownership.
  // Curated situations may clarify natural phrasing, but they must never replace an exact
  // keyword the product has explicitly promised to keep stable.
@@ -923,7 +1148,7 @@ function keywordOwnSoftTermRoute(query){
 // phrase (e.g. "기숙사 신청", "모의 토익 신청", "총학생회 문의"), that result stays.
 const KEYWORD_FACET_TAIL_PATTERNS=[
  /(?:어디\s*(?:에|로)?\s*(?:문의(?:해|할|하면|해야)?|가(?:면|야|야해|야돼)?|찾아가(?:면|야)?|가야\s*해)?|어디로\s*가)\s*$/i,
- /(?:전화번호|연락처|전화|문의(?:처|하기|해|할|하면|해야)?|필요한\s*서류|필요\s*서류|준비물|서류|절차|방법|언제까지|언제|기간|비용|수수료|온라인으로|온라인|위치|자격|조건)\s*$/i
+ /(?:전화번호|연락처|전화|담당\s*부서|담당부서명|담당자|어느\s*부서|부서|문의(?:처|하기|해|할|하면|해야)?|필요한\s*서류|필요\s*서류|준비물|서류|절차|신청\s*방법|방법|언제까지|언제|기간|비용|수수료|온라인으로|온라인|위치|자격|조건)\s*$/i
 ];
 function stripKeywordFacetTailOnce(query){
  let raw=String(query||'').trim().replace(/[\s,;·/]+$/g,'').trim();
@@ -947,14 +1172,38 @@ function keywordFacetBaseCandidates(query){
  }
  return out;
 }
-function serviceHasExactStrongKeywordEvidence(service,query){
+function serviceHasExactStrongKeywordEvidence(service,query,{includeSituations=true}={}){
  const n=normalizeQuery(query);if(!service||!n)return false;
- const vals=[service.title,...(service.aliases||[]),...(service.route_keywords||[]),...(service.situations||[])];
+ const vals=[service.title,...(service.aliases||[]),...(service.route_keywords||[]),...(includeSituations?(service.situations||[]):[])];
  return vals.some(v=>normalizeQuery(v)===n);
 }
 function visibleRouteItems(route){
  if(!route||route.status!=='answer'||!Array.isArray(route.items))return [];
  return (route.reason==='multi_intent'||route.broad)?route.items.slice(0,5):route.items.slice(0,1);
+}
+function facetBaseDeterministicRoute(base){
+ // Resolve a non-action facet's stripped base through the same deterministic layers that define
+ // its standalone meaning. Action facets (방법/신청방법) deliberately keep the v7.3.30 legacy
+ // keyword-only fallback so stable specific workflows are never broadened or replaced.
+ const broad=broadSingleKeywordCollectionRoute(base);if(broad)return dedupeRouteIntentItems(broad);
+ const exactSituation=exactSituationPriorityRoute(base);if(exactSituation)return dedupeRouteIntentItems(exactSituation);
+ const explicitClauses=explicitSeparatedClauseKeywordRoute(base);if(explicitClauses)return dedupeRouteIntentItems(explicitClauses);
+ const sameServiceSoft=keywordOwnSoftTermRoute(base);if(sameServiceSoft)return dedupeRouteIntentItems(sameServiceSoft);
+ const keywordLocked=keywordFirstRoute(base);
+ const rawParts=String(base||'').trim().replace(/[·]+/g,' ').split(/\s+/).map(x=>x.trim()).filter(Boolean);
+ if(rawParts.length>=2&&rawParts.length<=12){
+   const explicitKeywordList=explicitKeywordEnumerationRoute(base,keywordLocked);
+   if(explicitKeywordList)return dedupeRouteIntentItems(explicitKeywordList);
+ }
+ if(keywordLocked)return dedupeRouteIntentItems(keywordLocked);
+ // Some stable standalone bases are resolved only inside the raw deterministic layers (for
+ // example 3D프린터 -> p0_resolver, 학생상담센터 -> exact_catalog_term). Keep those strong
+ // routes available to facet recovery, but never promote weak direct/semantic/natural matches
+ // from an ordinary sentence such as '학교에서 아픈데 어디 가'.
+ const deterministic=dedupeRouteIntentItems(searchCampusServicesRaw(base,true));
+ const safeRawReasons=new Set(['p0_resolver','exact_situation','exact_catalog_term','composite_early','exact_route_alias','canonical_route_alias','specific','context_priority','context','route_keyword']);
+ if(deterministic?.status==='answer'&&(deterministic.items||[]).length&&safeRawReasons.has(deterministic.reason))return deterministic;
+ return null;
 }
 function keywordFacetFallbackRoute(query,deterministic){
  const candidates=keywordFacetBaseCandidates(query);if(!candidates.length)return null;
@@ -994,8 +1243,16 @@ function keywordFacetFallbackRoute(query,deterministic){
    return sum;
  };
  const successful=[];
+ // v7.3.30 already has stable action-facet semantics (메이커스페이스 신청방법 -> 3D프린터 예약,
+ // 학생군사교육단 신청방법 -> ROTC 지원·선발, etc.). Expand base resolution only when the
+ // query has no 방법 token; this fixes soft/institution routing facets without touching actions.
+ const expandedBaseAllowed=!/(?:신청\s*방법|신청방법|방법)/i.test(String(query||''));
  for(let i=0;i<candidates.length;i++){
-   const r=keywordFirstRoute(candidates[i]);
+   // For stacked facets, intermediate forms still contain a facet token (e.g. `LMS 담당부서`).
+   // Let only the fully stripped final base use the expanded deterministic resolver; otherwise an
+   // inner facet can be misread as a new workflow before the outer facet is completely removed.
+   const finalBase=i===candidates.length-1;
+   const r=(expandedBaseAllowed&&finalBase)?facetBaseDeterministicRoute(candidates[i]):keywordFirstRoute(candidates[i]);
    if(r?.status==='answer'&&r.items?.length){
      const rec=KEYWORD_ANCHOR_MAP.get(normalizeQuery(candidates[i]));
      successful.push({i,route:r,base:candidates[i],exactTitle:Boolean(rec?.titleOwners?.size),titleCoverage:titleCoverage(candidates[i])});
@@ -1011,7 +1268,7 @@ function keywordFacetFallbackRoute(query,deterministic){
  // Exact catalog evidence for the original or minimally facet-stripped phrase means the
  // deterministic resolver found a genuinely more specific card; preserve it.
  const firstBase=candidates[0]||base;
- if(top&&visible.length===1&&(serviceHasExactStrongKeywordEvidence(top,query)||serviceHasExactStrongKeywordEvidence(top,firstBase)))return null;
+ if(top&&visible.length===1&&serviceHasExactStrongKeywordEvidence(top,query,{includeSituations:false}))return null;
  // If we had to remove a trailing "신청" as well, preserve a high-confidence action-specific
  // local result (ROTC 지원·선발, 생활관 입사 신청, etc.). Weak semantic/direct results do not qualify.
  if(usedActionTrim&&top&&visible.length===1&&fallback.items.slice(0,5).length===1){
@@ -1120,10 +1377,49 @@ const STANDALONE_CAMPUS_TERMS=new Set([
 ].map(normalizeQuery));
 function isSafeStandaloneQuery(q){
  const n=normalizeQuery(q);if(!n)return false;
- if(hasCampusIntentSignal(q)||BROAD_CONCEPTS.has(n)||STANDALONE_CAMPUS_TERMS.has(n))return true;
+ if(hasCampusIntentSignal(q)||BROAD_CONCEPTS.has(n)||STANDALONE_CAMPUS_TERMS.has(n)||hasExactCatalogTermEvidence(q))return true;
  if(SEARCH_CONCEPTS.some(c=>(c.aliases||[]).some(a=>normalizeQuery(a)===n)))return true;
  const routeOwners=SEARCH_INDEX.filter(e=>(e.service.route_keywords||[]).some(k=>normalizeQuery(k)===n));if(n.length>=3&&routeOwners.length===1&&!['대출','반납','입실','퇴실','세입','인건비','원천세','특허','기부','기탁','사물함','수서'].includes(n))return true;
  return SEARCH_INDEX.some(e=>['academic_directory','academic_directory_general','organization_registry'].includes(e.service.kind)&&(e.service.route_keywords||[]).some(k=>normalizeQuery(k)===n));
+}
+
+function hasExactCatalogTermEvidence(query){
+ const raw=String(query||'').trim(),n=normalizeQuery(raw);if(!n)return false;
+ for(const e of SEARCH_INDEX){
+   const svc=e.service;
+   if([svc.title,...(svc.aliases||[]),...(svc.route_keywords||[]),...(svc.search_terms||[])].some(v=>normalizeQuery(v)===n))return true;
+ }
+ return false;
+}
+
+function sharedExactCatalogTermRoute(query){
+ const raw=String(query||'').trim(),n=normalizeQuery(raw);if(!n||n.length<3||splitQuery(raw).length!==1)return null;
+ // Before typo correction, protect an exact catalog term that is shared by several real intents.
+ // A one-edit alternative must never hijack an exact campus concept (교육과정 -> 교직과정,
+ // 대학회계 -> 대학원회계). Strong title/alias/route keywords have already been handled by
+ // keyword-first; this guard is for exact search-term/category vocabulary that genuinely spans
+ // multiple services.
+ const matches=[];
+ for(const e of SEARCH_INDEX){
+   const exactHigh=e.high.some(x=>x===n),exactMid=e.mid.some(x=>x===n);
+   if(!exactHigh&&!exactMid)continue;
+   // Department/category labels alone are too broad to manufacture a search result. Require an
+   // explicit title/alias/route/search-term/situation ownership in the underlying record.
+   const svc=e.service;
+   const explicit=[svc.title,...(svc.aliases||[]),...(svc.route_keywords||[]),...(svc.search_terms||[]),...(svc.situations||[])].some(v=>normalizeQuery(v)===n);
+   if(!explicit)continue;
+   matches.push({service:svc,score:scoreSearchEntry(e,raw,detectConcept(raw))+(exactHigh?240:0)});
+ }
+ const byGroup=new Map();
+ for(const item of matches){
+   const group=serviceIntentGroup(item.service);if(!group)continue;
+   const prev=byGroup.get(group);
+   const pr={workflow:0,academic_directory_general:1,academic_directory:2,official_route:3,department_route:4,organization_registry:5};
+   if(!prev||item.score>prev.score||(item.score===prev.score&&((pr[item.service.kind]??9)<(pr[prev.service.kind]??9))))byGroup.set(group,item);
+ }
+ if(!byGroup.size)return null;
+ const items=[...byGroup.values()].sort((a,b)=>b.score-a.score||String(a.service.title||'').length-String(b.service.title||'').length||a.service.id.localeCompare(b.service.id)).slice(0,5);
+ return {status:'answer',items,reason:'exact_catalog_term',broad:byGroup.size>1,total_intents:byGroup.size,truncated_count:Math.max(0,byGroup.size-5),multi_source:'exact_catalog_term'};
 }
 
 function exactSituationMatches(q){
@@ -1169,7 +1465,7 @@ function exactAcademicDirectoryMatches(q){
 function academicDirectoryMatches(q){
  const n=normalizeQuery(q); if(!n)return [];
  const out=[];
- const dirIntent=['어디','찾','학과','전공','소속','스쿨','대학','학부','목록','안내'].some(x=>n.includes(normalizeQuery(x)));
+ const dirIntent=['어디','찾','학과','전공','소속','스쿨','학부','목록','안내'].some(x=>n.includes(normalizeQuery(x)));
  const actionBlock=['편입','멘토','상담','장학','강좌','수강','수업','취업','견적','번역','예약','고장','신청','증명','시험','출석','연구단','사업단','교육원'].some(x=>n.includes(normalizeQuery(x)));
  for(const e of SEARCH_INDEX){
    if(e.service.kind!=='academic_directory')continue;
@@ -1229,7 +1525,7 @@ function splitMultiIntent(q){
  // surrounded by Latin letters/digits on both sides.
  const AMP_HOLD='__EODIGA_AMP__';
  marked=marked.replace(/([A-Za-z0-9])[&＆](?=[A-Za-z0-9])/g,'$1'+AMP_HOLD);
- marked=marked.replace(/[;,，；/＋+&＆|\n]+/g,'|||').replaceAll(AMP_HOLD,'&');
+ marked=marked.replace(/[;,，；/＋+&＆|\n]+/g,'|||').replace(/\s+·\s+/g,'|||').replaceAll(AMP_HOLD,'&');
  const nextConcept='(?:휴학|복학|자퇴|재입학|전과|학과|다전공|복수전공|부전공|학생증|신분증|국가장학금|장학금|등록금|학비|수강|성적|학점|졸업|기숙사|생활관|도서관|통학버스|주차|ROTC|rotc|학군단|교환학생|취업|진로|상담|인권|보건|시설|누수|에어컨|와이파이|향림통|LMS|lms|증명서|재학증명서|대학원|창업|연구|IRB|irb|사업단|우산|노트북)';
  // Split clear additive connectors, but never inside real words such as “또래상담”.
  marked=marked.replace(/(?:^|\s+)(?:뿐만\s+아니라|그리고|또한|동시에|게다가|및)(?=\s+|$)/g,'|||');
@@ -1975,7 +2271,9 @@ function searchCampusServicesRaw(query,metaGuard=false){
  const contextual=contextRoute(q)||((qLoose&&qLoose!==q)?contextRoute(qLoose):null);if(contextual)return contextual;
  const exactDir=exactAcademicDirectoryMatches(q);if(exactDir.length)return {status:'answer',items:exactDir.slice(0,7),reason:'academic_directory_exact'};
  const dmIntent=academicDirectoryIntentMatches(q);if(dmIntent.length)return {status:'answer',items:dmIntent.slice(0,7),reason:'academic_directory_intent'};
- const earlyConcept=detectConcept(q);const typoAll=typoCandidates(q);const typoDomains=new Set(typoAll.map(x=>x.service.domain));if(typoAll.length&&typoAll.length<=3&&typoDomains.size===1)return {status:'answer',items:typoAll.slice(0,7),reason:'typo_strong'};const typo=typoAll.filter(x=>!earlyConcept||x.service.domain===earlyConcept.domain);if(typo.length&&typo.length<=4)return {status:'answer',items:typo.slice(0,7),reason:'typo'};const typoPhraseAll=typoPhraseCandidates(q);const typoPhraseDomains=new Set(typoPhraseAll.map(x=>x.service.domain));const conceptLooksTypo=earlyConcept&&normalizeQuery(earlyConcept.alias)!==n&&editDistanceOne(n,normalizeQuery(earlyConcept.alias));if(typoPhraseAll.length&&typoPhraseAll.length<=3&&typoPhraseDomains.size===1&&(!earlyConcept||(conceptLooksTypo&&typoPhraseAll.every(x=>x.service.domain===earlyConcept.domain))))return {status:'answer',items:typoPhraseAll.slice(0,7),reason:'typo_phrase'};
+ const exactCatalogTerm=hasExactCatalogTermEvidence(q);
+ const exactCatalogRoute=exactCatalogTerm?sharedExactCatalogTermRoute(q):null;if(exactCatalogRoute)return exactCatalogRoute;
+ const earlyConcept=detectConcept(q);const typoAll=exactCatalogTerm?[]:typoCandidates(q);const typoDomains=new Set(typoAll.map(x=>x.service.domain));if(typoAll.length&&typoAll.length<=3&&typoDomains.size===1)return {status:'answer',items:typoAll.slice(0,7),reason:'typo_strong'};const typo=typoAll.filter(x=>!earlyConcept||x.service.domain===earlyConcept.domain);if(typo.length&&typo.length<=4)return {status:'answer',items:typo.slice(0,7),reason:'typo'};const typoPhraseAll=exactCatalogTerm?[]:typoPhraseCandidates(q);const typoPhraseDomains=new Set(typoPhraseAll.map(x=>x.service.domain));const conceptLooksTypo=earlyConcept&&normalizeQuery(earlyConcept.alias)!==n&&editDistanceOne(n,normalizeQuery(earlyConcept.alias));if(typoPhraseAll.length&&typoPhraseAll.length<=3&&typoPhraseDomains.size===1&&(!earlyConcept||(conceptLooksTypo&&typoPhraseAll.every(x=>x.service.domain===earlyConcept.domain))))return {status:'answer',items:typoPhraseAll.slice(0,7),reason:'typo_phrase'};
  const directoryMatch=academicDirectoryMatches(q);if(directoryMatch.length)return {status:'answer',items:directoryMatch.slice(0,7),reason:'academic_directory'};
  if(splitQuery(q).length===1&&!isSafeStandaloneQuery(q))return {status:'unknown',items:[],reason:'no_signal'};
  let strongRoute=strongRouteKeywordMatches(q);if(!strongRoute.length&&qLoose&&qLoose!==q)strongRoute=strongRouteKeywordMatches(qLoose);if(strongRoute.length)return {status:'answer',items:strongRoute.slice(0,7),reason:'route_keyword'};
@@ -2079,8 +2377,17 @@ function searchCampusServices(query,metaGuard=false){
   // A unique curated natural-language situation may resolve the whole sentence only when
   // it is not itself a registered strong keyword and has no explicit multi-intent separator.
   // This restores the intended natural-language context layer without weakening keyword-first.
-  const exactSituation=exactSituationPriorityRoute(query);
+  // A trailing routing facet (문의/담당부서/위치/서류/방법...) must not let a broad
+  // exact-situation sentence override a stronger catalog keyword once that facet is removed.
+  // Example: '바이브코딩대회 문의' must keep the 바이브코딩대회 workflow rather than the
+  // AI사업단 umbrella situation. Action-specific phrases such as '기숙사 신청 문의' are still
+  // resolved later by the deterministic action resolver and facet guard.
+  const hasStrongFacetBase=keywordFacetBaseCandidates(query).some(base=>{
+    const r=keywordFirstRoute(base);return Boolean(r?.status==='answer'&&(r.items||[]).length);
+  });
+  const exactSituation=hasStrongFacetBase?null:exactSituationPriorityRoute(query);
   if(exactSituation)return dedupeRouteIntentItems(exactSituation);
+  if(!metaGuard){const explicitClauses=explicitSeparatedClauseKeywordRoute(query);if(explicitClauses)return dedupeRouteIntentItems(explicitClauses);}
   // Keyword mode is the product's primary contract. Run it on the untouched input before
   // natural-language clause cleanup so separators that are part of official titles (·, /, &)
   // cannot destroy an otherwise exact 1~5 keyword enumeration.
@@ -2089,13 +2396,12 @@ function searchCampusServices(query,metaGuard=false){
   const keywordLocked=keywordFirstRoute(query);
   if(!metaGuard){
     const rawParts=String(query||'').trim().replace(/[·]+/g,' ').split(/\s+/).map(x=>x.trim()).filter(Boolean);
-    const lockedCount=Number(keywordLocked?.total_intents)||(keywordLocked?.items||[]).length;
-    // Only invoke the more expensive per-token fallback when the mature keyword parser clearly
-    // did not preserve all visually enumerated tokens. Fully parsed ordinary queries keep the
-    // existing fast path and exact-title behavior.
-    if(rawParts.length>=2&&rawParts.length<=12&&(!keywordLocked||lockedCount<rawParts.length)){
-      const explicitKeywordList=explicitKeywordEnumerationRoute(query);
-      if(explicitKeywordList&&(!keywordLocked||Number(explicitKeywordList.total_intents)>lockedCount))return dedupeRouteIntentItems(explicitKeywordList);
+    // Preserve the mature parser's official compound matches first, then fill only the independently
+    // owned keyword slots it missed. Ambiguous single keywords consume one representative slot here,
+    // so they cannot crowd another explicitly typed keyword out of the max-5 display.
+    if(rawParts.length>=2&&rawParts.length<=12){
+      const explicitKeywordList=explicitKeywordEnumerationRoute(query,keywordLocked);
+      if(explicitKeywordList)return dedupeRouteIntentItems(explicitKeywordList);
     }
   }
   if(keywordLocked){
@@ -2472,14 +2778,14 @@ function findUnresolvedClauses(query){
 
 function renderMultiSummary(items, query){
   const host=$('#resultSummary');if(!host)return;host.innerHTML='';
-  const selected=items.slice(0,5).map(x=>x.service);
+  const selected=items.slice(0,5).filter(x=>x?.service);
   const section=document.createElement('section');section.className='multi-summary';
   const top=document.createElement('div');top.className='multi-summary-top';
   const title=document.createElement('div');const kicker=document.createElement('span');kicker.className='summary-kicker';kicker.textContent='한 번에 확인하기';
   const h=document.createElement('h3');h.textContent=`${selected.length}개 업무를 한 번에 정리했어요.`;title.append(kicker,h);top.append(title);section.appendChild(top);
   const grid=document.createElement('div');grid.className='multi-summary-grid linked-summary-grid';
-  selected.forEach(service=>{const box=document.createElement('div');box.className='summary-group linked-summary-item';
-    const l=document.createElement('span');l.className='summary-label';l.textContent=service.title;box.appendChild(l);
+  selected.forEach(item=>{const service=item.service,box=document.createElement('div');box.className='summary-group linked-summary-item';
+    const l=document.createElement('span');l.className='summary-label';l.textContent=item.display_title||service.title;box.appendChild(l);
     const dept=document.createElement('p');dept.className='summary-linked-line';dept.textContent=`담당: ${service.department?.name||'공식 출처 확인'}`;box.appendChild(dept);
     const docs=document.createElement('p');docs.className='summary-linked-line';docs.textContent=(service.documents||[]).length?`준비: ${(service.documents||[]).join(' · ')}`:'준비: 업무 카드/공식 출처에서 확인';box.appendChild(docs);grid.appendChild(box);
   });
@@ -2564,8 +2870,8 @@ function createServiceCard(item, isPrimary=false){
   if(article) article.dataset.serviceId = service.id;
 
   node.querySelector('.category-pill').textContent = service.category;
-  node.querySelector('.service-title').textContent = service.title;
-  node.querySelector('.service-description').textContent = service.description || '공식 안내를 확인해주세요.';
+  node.querySelector('.service-title').textContent = item.display_title || service.title;
+  node.querySelector('.service-description').textContent = item.display_description || service.description || '공식 안내를 확인해주세요.';
 
   if(service.time_sensitive) node.querySelector('.time-warning').classList.remove('hidden');
 
@@ -2783,11 +3089,10 @@ function renderUnresolvedNotice(clauses=[]){
 function renderResultLimitNotice(route){const hidden=Math.max(0,Number(route?.truncated_count)||0);if(!hidden)return;const host=$('#resultSummary');if(!host)return;const box=document.createElement('section');box.className='unresolved-notice result-limit-notice';const b=document.createElement('b');const p=document.createElement('p');if(route?.broad&&route?.reason!=='multi_intent'){b.textContent='관련 업무가 많아 최대 5개를 먼저 안내해요.';p.textContent=`“${activeResultQuery}” 관련 업무 중 직접 관련도가 높은 5개를 우선 보여드려요. 찾는 내용이 없으면 키워드를 조금 더 구체적으로 입력해주세요.`;}else{b.textContent='한 번에 최대 5개 업무까지 안내해요.';p.textContent=`입력에서 ${Number(route?.total_intents)||5+hidden}개의 독립 업무를 찾았어요. 나머지 ${hidden}개는 별도로 검색해주세요.`;}box.append(b,p);host.appendChild(box);}
 function shouldAssistMissingOnly(query,route){
   if(location.protocol==='file:'||!route||route.status!=='answer'||!(route.items||[]).length)return false;
-  // A catalog-backed keyword lock is final. Gemini must never audit, add to, or reinterpret
-  // explicit 1~5 keyword results, including facet-restored keyword routes.
-  if(route.reason==='keyword_exact'||String(route.multi_source||'').startsWith('keyword_'))return false;
-  // Keep the deterministic engine authoritative when it already resolves the query.
-  // Gemini is only a fallback for explicit clauses that the existing engine could not resolve.
+  // Keyword results stay locked, but a genuinely independent clause that the keyword engine
+  // did not resolve may still use missing-only Gemini to ADD the missing workflow.  Never let
+  // Gemini re-judge or replace the already matched keyword IDs.  Pure keyword enumerations have
+  // no unresolved independent clause, so they still make zero classifier calls.
   const unresolved=findUnresolvedClauses(query);
   if(!unresolved.length)return false;
   return (route.items||[]).length<5;
@@ -2825,6 +3130,24 @@ function fullAssistObjectSignals(query){
   for(const term of FULL_ASSIST_CONTEXT_OBJECTS){if(hasTerm(term))contextual.push(term);}
   return {strong:[...new Set(strong)].slice(0,5),contextual:[...new Set(contextual)].slice(0,5)};
 }
+const FULL_ASSIST_NOVEL_IGNORE=new Set([
+  '학교','교내','캠퍼스','순천대','순천대학교','국립순천대학교','학생','대학','프로그램','업무','부서','담당','담당자',
+  '어떻게','어디','어디로','어디에','언제','왜','뭐','무엇','어느','관련','문의','방법','절차','지원','신청','접수','등록',
+  '하고','하고싶어','하고싶어요','하려고','하려면','해야','해야해','해야돼','하고자','되는','되려면','되고','싶어','싶어요','해','해주세요'
+].map(normalizeQuery));
+function hasNovelCampusTaskEvidence(query){
+  const raw=String(query||'').trim();
+  if(!FULL_ASSIST_CAMPUS_CONTEXT_RE.test(raw))return false;
+  const tokens=clauseCoreTokens(raw).map(normalizeQuery).filter(Boolean);
+  const meaningful=tokens.filter(t=>{
+    if(t.length<2||FULL_ASSIST_NOVEL_IGNORE.has(t))return false;
+    if(FULL_ASSIST_ACTION_RE.test(t))return false;
+    if(/^(?:지원|신청|접수|등록|발급|재발급|문의|확인|조회|변경|정정|취소|제출|방법|절차|어떻게|어디|언제)/.test(t))return false;
+    if(/(?:하려면|하려고|하고싶|해야|되는|되고|싶어|싶어요|해주세요|해줘)$/.test(t))return false;
+    return true;
+  });
+  return meaningful.length>0;
+}
 function fullAssistGate(query,route={}){
   const raw=String(query||'').trim();const n=normalizeQuery(raw);
   if(!n)return {allow:false,reason:'empty',score:0,objects:[]};
@@ -2835,14 +3158,16 @@ function fullAssistGate(query,route={}){
   const routingAction=FULL_ASSIST_ACTION_RE.test(raw);
   const strongObject=objects.strong.length>0||explicitConcept;
   const contextualObject=objects.contextual.length>0;
+  const novelCampusObject=hasNovelCampusTaskEvidence(raw);
   const coreTokens=clauseCoreTokens(raw).filter(t=>t.length>=2&&!['학교','순천대','순천대학교','교내','캠퍼스','학생','대학'].includes(t));
   const keywordLike=coreTokens.length<=3&&!/[.!?。！？]/.test(raw)&&raw.length<=30;
-  let score=0;if(strongObject)score+=4;if(contextualObject)score+=2;if(campusContext)score+=2;if(routingAction)score+=3;
-  // Normal sentence: a routing action/question must point to a campus/admin object.
-  if(routingAction&&(strongObject||contextualObject||campusContext&&hasIndependentTaskEvidence(raw))){
-    // "학교 + 어디/언제" alone is still just a facet question with no task object.
-    if(!strongObject&&!contextualObject&&campusContext&&!hasIndependentTaskEvidence(raw))return {allow:false,reason:'no_task_object',score,objects:[]};
-    return {allow:true,reason:'task_signal',score,objects:[...objects.strong,...objects.contextual].slice(0,5)};
+  let score=0;if(strongObject)score+=4;if(contextualObject)score+=2;if(campusContext)score+=2;if(routingAction)score+=3;if(novelCampusObject)score+=2;
+  // Normal sentence: a routing action/question must point to either a known campus object or a
+  // meaningful *novel* object phrase in explicit campus context. This is what sends unfamiliar
+  // wording such as "군 장교 되는 학교 프로그램에 지원..." to Gemini instead of silently
+  // rendering no-result, while "학교 어디야" still fails closed as a facet-only question.
+  if(routingAction&&(strongObject||contextualObject||novelCampusObject)){
+    return {allow:true,reason:novelCampusObject&&!strongObject&&!contextualObject?'novel_campus_task':'task_signal',score,objects:[...objects.strong,...objects.contextual].slice(0,5)};
   }
   // Search boxes are also used as keyword boxes. Only strong campus/admin objects get this verb-less path.
   if(keywordLike&&strongObject)return {allow:true,reason:'campus_keyword',score,objects:[...objects.strong].slice(0,5)};
@@ -2882,11 +3207,12 @@ async function performSearch(options={}){
      if(stillUnresolved.length)renderUnresolvedNotice(stillUnresolved);
    }).catch(()=>{if(requestId===searchSequence)renderUnresolvedNotice(unresolved);}).finally(()=>{if(requestId===searchSequence)setLoading(false);});return;
  }
- const aiBlockedReasons=new Set(['out_of_scope','out_of_scope_other_university','role_mismatch','out_of_scope_general_advice','generation_not_routing','no_action']);
- // FULL Gemini is not a catch-all for every local miss. It is allowed only when a positive local gate
- // sees evidence that the input is genuinely asking for a campus administrative task/department.
+ const hardAiBlockedReasons=new Set(['out_of_scope_other_university','role_mismatch']);
+ // FULL Gemini is not a catch-all for every local miss.  The positive gate itself owns the
+ // campus/admin decision; weak local labels such as no_signal/out_of_scope_general_advice must not
+ // suppress a positively identified novel campus task before /api/classify is even attempted.
  const fullGate=fullAssistGate(q,route);
- const canAssist=location.protocol!=='file:' && !aiBlockedReasons.has(route.reason) && fullGate.allow;
+ const canAssist=location.protocol!=='file:' && !hardAiBlockedReasons.has(route.reason) && fullGate.allow;
  if(!canAssist){renderNoResult(q);return;}
  renderAssistPending();setLoading(true);
  classifyUncertainQuery(q,{assist_mode:'full'}).then(r=>{
@@ -2935,12 +3261,20 @@ function renderSearchResult(q,route,ms=0){
  window.scrollTo({top:$('#searchState').offsetTop-35,behavior:'smooth'});
 }
 globalThis.EodigaDebug={
+ version:'7.3.34-WIP',
  search(query){
    const q=String(query||'').slice(0,300);
    const route=searchCampusServices(q);
    route.confidence=classifyRouteConfidence(route,q);
    route.evidence=buildSearchEvidence(q,route);
    return route;
+ },
+ assistDecision(query){
+   const q=String(query||'').slice(0,300);
+   const route=searchCampusServices(q);
+   const unresolved=route?.status==='answer'&&route?.items?.length?findUnresolvedClauses(q):[];
+   const fullGate=fullAssistGate(q,route);
+   return {version:'7.3.34-WIP',route_status:route?.status||null,route_reason:route?.reason||null,multi_source:route?.multi_source||null,matched_service_ids:(route?.items||[]).slice(0,5).map(x=>x.service?.id).filter(Boolean),unresolved_clauses:unresolved,full_gate:fullGate,will_call_full:location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_call_missing_only:location.protocol!=='file:'&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route))};
  }
 };
 

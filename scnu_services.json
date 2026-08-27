@@ -489,7 +489,10 @@
       ],
       "domain": "academic",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "학적부"
+      ]
     },
     {
       "id": "cert_scholarship",
@@ -603,7 +606,10 @@
       ],
       "domain": "academic",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "수강신청내역"
+      ]
     },
     {
       "id": "cert_tuition",
@@ -1218,7 +1224,10 @@
       ],
       "domain": "academic",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "다전공"
+      ]
     },
     {
       "id": "double_major",
@@ -1276,6 +1285,9 @@
       ],
       "aliases": [
         "복수전공 담당"
+      ],
+      "route_keywords": [
+        "복수전공담당"
       ]
     },
     {
@@ -1598,7 +1610,10 @@
       ],
       "domain": "academic",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "수업시간표"
+      ]
     },
     {
       "id": "course_registration",
@@ -1664,6 +1679,9 @@
       "browse_hidden": false,
       "aliases": [
         "수강신청 담당"
+      ],
+      "route_keywords": [
+        "수강신청담당"
       ]
     },
     {
@@ -2012,6 +2030,9 @@
       "browse_hidden": false,
       "user_notice": [
         "공식 안내상 최대 6학점"
+      ],
+      "route_keywords": [
+        "계절학기"
       ]
     },
     {
@@ -2670,7 +2691,10 @@
           "verified_at": "2026-08-23",
           "priority": "교직과정 신청자격 직접 안내"
         }
-      }
+      },
+      "route_keywords": [
+        "교직과정"
+      ]
     },
     {
       "id": "teacher_double",
@@ -3117,7 +3141,10 @@
       ],
       "domain": "academic",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "졸업자격인증"
+      ]
     },
     {
       "id": "major_assignment",
@@ -3179,7 +3206,10 @@
           "verified_at": "2026-08-20",
           "priority": "업무 직접성·확인일 기준 검증 출처"
         }
-      }
+      },
+      "route_keywords": [
+        "전공배정"
+      ]
     },
     {
       "id": "major_transfer",
@@ -3764,6 +3794,9 @@
       ],
       "aliases": [
         "복학 담당"
+      ],
+      "route_keywords": [
+        "복학담당"
       ]
     },
     {
@@ -4042,7 +4075,10 @@
           "verified_at": "2026-08-20",
           "priority": "업무 직접성·확인일 기준 검증 출처"
         }
-      }
+      },
+      "route_keywords": [
+        "재입학"
+      ]
     },
     {
       "id": "record_name",
@@ -4257,7 +4293,10 @@
       ],
       "domain": "student",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "교내장학"
+      ]
     },
     {
       "id": "sch_grade",
@@ -4652,7 +4691,10 @@
       ],
       "domain": "student",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "국가장학"
+      ]
     },
     {
       "id": "sch_work",
@@ -4710,7 +4752,10 @@
       ],
       "domain": "student",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "국가근로"
+      ]
     },
     {
       "id": "sch_excellence",
@@ -4877,7 +4922,10 @@
       ],
       "domain": "student",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "학자금대출"
+      ]
     },
     {
       "id": "tuition_payment",
@@ -4936,7 +4984,10 @@
       ],
       "domain": "finance",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "등록금납부"
+      ]
     },
     {
       "id": "tuition_bill",
@@ -5792,7 +5843,10 @@
       ],
       "domain": "education_innovation",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "LMS"
+      ]
     },
     {
       "id": "campus_sw",
@@ -5848,7 +5902,10 @@
       ],
       "domain": "it",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "소프트웨어라이선스"
+      ]
     },
     {
       "id": "remote_support",
@@ -5983,7 +6040,11 @@
           "verified_at": "2026-08-23",
           "priority": "인권센터 최신 업무분장(상담 담당 3163)"
         }
-      }
+      },
+      "route_keywords": [
+        "성희롱",
+        "성폭력"
+      ]
     },
     {
       "id": "personal_counsel",
@@ -6435,7 +6496,10 @@
       ],
       "domain": "international",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "교환학생"
+      ]
     },
     {
       "id": "language_program",
@@ -6536,7 +6600,10 @@
       ],
       "domain": "international",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "모의토익"
+      ]
     },
     {
       "id": "dorm_apply",
@@ -6748,7 +6815,10 @@
       ],
       "domain": "dorm",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "생활관상담"
+      ]
     },
     {
       "id": "goshi",
@@ -6862,7 +6932,10 @@
       ],
       "domain": "student",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "보건진료실"
+      ]
     },
     {
       "id": "health_emergency",
@@ -7204,7 +7277,10 @@
       ],
       "domain": "student",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "장애학생지원센터"
+      ]
     },
     {
       "id": "disability_course",
@@ -7769,6 +7845,9 @@
       "browse_hidden": false,
       "user_notice": [
         "공식 안내상 재학생은 풋살구장 외 시설은 학과(전공) 조교를 통해 신청"
+      ],
+      "route_keywords": [
+        "국제문화컨벤션관"
       ]
     },
     {
@@ -8029,7 +8108,10 @@
       ],
       "domain": "career",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "진로취업상담"
+      ]
     },
     {
       "id": "resume",
@@ -8091,7 +8173,10 @@
       ],
       "domain": "career",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "입사지원서"
+      ]
     },
     {
       "id": "interview",
@@ -8151,7 +8236,10 @@
       ],
       "domain": "career",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "면접클리닉"
+      ]
     },
     {
       "id": "image_making",
@@ -8570,7 +8658,10 @@
       ],
       "domain": "career",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "해외취업"
+      ]
     },
     {
       "id": "regional7",
@@ -8702,7 +8793,10 @@
       ],
       "domain": "career",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "향림취업향상포인트"
+      ]
     },
     {
       "id": "competency",
@@ -9229,7 +9323,10 @@
       ],
       "domain": "startup",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "창업동아리"
+      ]
     },
     {
       "id": "startup_incubation",
@@ -9282,7 +9379,10 @@
       ],
       "domain": "startup",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "창업보육센터"
+      ]
     },
     {
       "id": "ai_business_plan",
@@ -9434,7 +9534,10 @@
       ],
       "domain": "student",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "해외봉사"
+      ]
     },
     {
       "id": "academic_faq",
@@ -10828,7 +10931,10 @@
       ],
       "domain": "dorm",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "입실"
+      ]
     },
     {
       "id": "dorm_move_out",
@@ -10891,7 +10997,10 @@
       ],
       "domain": "dorm",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "퇴실"
+      ]
     },
     {
       "id": "dorm_additional_application",
@@ -12010,6 +12119,9 @@
       "browse_hidden": false,
       "user_notice": [
         "학생회 구성은 연도별로 바뀔 수 있으므로 최신 학생회 공지를 우선합니다."
+      ],
+      "route_keywords": [
+        "총학생회"
       ]
     },
     {
@@ -13496,7 +13608,8 @@
       "route_keywords": [
         "정보공개청구",
         "행정정보공개",
-        "정보공개신청"
+        "정보공개신청",
+        "정보공개"
       ],
       "domain": "admin",
       "browse_hidden": false
@@ -13619,6 +13732,55 @@
         "행사장대관"
       ],
       "domain": "admin",
+      "browse_hidden": false
+    },
+    {
+      "id": "route_finance_university_accounting",
+      "kind": "official_route",
+      "domain": "finance",
+      "category": "행정·재무",
+      "title": "대학회계 문의",
+      "situations": [
+        "대학회계가 궁금해",
+        "대학회계 담당자",
+        "대학회계 예산·계약·지출 문의"
+      ],
+      "description": "대학회계 예산편성·계약·지출·결산 중 필요한 업무를 확인할 수 있는 공식 문의 경로입니다.",
+      "steps": [
+        "문의하려는 내용이 예산편성·계약·지출/결산 중 어디에 해당하는지 확인합니다.",
+        "업무별 담당 연락처로 문의하거나 공식 조직·업무안내에서 최신 담당자를 확인합니다."
+      ],
+      "documents": [],
+      "method": {
+        "online": true,
+        "visit": null,
+        "primary": "재무과 업무별 담당 문의"
+      },
+      "department": {
+        "name": "재무과",
+        "phone": "061-750-3091 / 061-750-3095 / 061-750-3098",
+        "location": null
+      },
+      "action_links": [],
+      "time_sensitive": false,
+      "clarification": "대학회계는 예산편성·계약·지출·결산 담당이 나뉘므로 구체 업무가 있으면 함께 입력해주세요.",
+      "sources": [
+        {
+          "url": "https://www.scnu.ac.kr/SCNU/og/organiz/selectOrganizList.do?menuCode=A&mi=1214&prntDeptCode=3",
+          "type": "SCNU_OFFICIAL",
+          "verified_at": "2026-08-27",
+          "label": "순천대 조직·업무안내"
+        }
+      ],
+      "search_terms": [
+        "대학회계",
+        "대학회계 문의",
+        "대학회계 담당"
+      ],
+      "route_keywords": [
+        "대학회계"
+      ],
+      "negative_keywords": [],
       "browse_hidden": false
     },
     {
@@ -14185,7 +14347,6 @@
       "route_keywords": [
         "SSO오류",
         "통합로그인오류",
-        "소프트웨어라이선스",
         "정보보안문의"
       ],
       "domain": "it",
@@ -14437,7 +14598,6 @@
       "route_keywords": [
         "TOPIK",
         "토픽시험",
-        "모의토익",
         "토익사관학교",
         "외국어강좌"
       ],
@@ -14809,7 +14969,6 @@
       ],
       "route_keywords": [
         "도서관문의",
-        "대출반납문의",
         "도서관연락처"
       ],
       "domain": "library",
@@ -15195,10 +15354,76 @@
         "강좌폐강"
       ],
       "route_keywords": [
-        "수강신청담당",
-        "수업시간표",
         "강좌폐강",
         "수업운영"
+      ],
+      "negative_keywords": [],
+      "browse_hidden": false
+    },
+    {
+      "id": "route_academic_class_makeup",
+      "kind": "department_route",
+      "domain": "academic",
+      "category": "학사·교무",
+      "title": "휴강·결강·보강 문의",
+      "situations": [
+        "수업 휴강 문의",
+        "수업 결강 문의",
+        "보강 일정·운영 문의",
+        "휴·보강 관련 문의"
+      ],
+      "description": "휴강·결강·보강 등 수업 운영 관련 공식 담당부서로 연결합니다.",
+      "steps": [
+        "휴강·결강·보강 여부와 수업 공지를 먼저 확인합니다.",
+        "추가 확인이 필요한 경우 교무학사과 수업운영 담당부서에 문의합니다."
+      ],
+      "documents": [],
+      "method": {
+        "online": true,
+        "visit": null,
+        "primary": "담당부서 문의 / 공식 안내 확인"
+      },
+      "department": {
+        "name": "교무학사과",
+        "phone": "061-750-3032",
+        "location": null
+      },
+      "action_links": [],
+      "time_sensitive": true,
+      "clarification": null,
+      "sources": [
+        {
+          "url": "https://www.scnu.ac.kr/SCNU/og/organiz/selectOrganizList.do?menuCode=A&mi=1214&prntDeptCode=2",
+          "type": "SCNU_OFFICIAL",
+          "verified_at": "2026-08-27",
+          "label": "순천대 조직·업무안내"
+        },
+        {
+          "url": "https://www.scnu.ac.kr/ani/na/ntt/selectNttInfo.do?mi=8664&nttSn=281287086",
+          "type": "SCNU_OFFICIAL",
+          "verified_at": "2026-08-27",
+          "label": "순천대 휴강·보강 안내 사례"
+        }
+      ],
+      "search_terms": [
+        "휴강",
+        "결강",
+        "보강",
+        "휴보강",
+        "휴·보강",
+        "수업휴강",
+        "수업결강",
+        "보강수업",
+        "보강일",
+        "수업운영",
+        "수업관리",
+        "교무학사과"
+      ],
+      "route_keywords": [
+        "휴강",
+        "결강",
+        "보강",
+        "휴보강"
       ],
       "negative_keywords": [],
       "browse_hidden": false
@@ -15262,11 +15487,7 @@
       ],
       "route_keywords": [
         "졸업사정",
-        "졸업자격인증",
-        "복수전공담당",
-        "다전공",
-        "편입학점",
-        "재입학"
+        "편입학점"
       ],
       "negative_keywords": [],
       "browse_hidden": false
@@ -15327,7 +15548,6 @@
       ],
       "route_keywords": [
         "성적담당",
-        "계절학기",
         "전자출결",
         "조기취업자출석"
       ],
@@ -15390,9 +15610,10 @@
       ],
       "route_keywords": [
         "교원자격",
-        "교직과정",
         "교육봉사",
-        "학생교류"
+        "학생교류",
+        "교원자격증",
+        "교사자격증"
       ],
       "negative_keywords": [],
       "browse_hidden": false
@@ -15458,10 +15679,7 @@
       ],
       "route_keywords": [
         "휴학담당",
-        "복학담당",
-        "학적부",
         "전과담당",
-        "전공배정",
         "학적민원"
       ],
       "negative_keywords": [],
@@ -15625,8 +15843,6 @@
         "학생증담당"
       ],
       "route_keywords": [
-        "국가장학",
-        "학자금대출",
         "학생증담당"
       ],
       "negative_keywords": [],
@@ -15683,7 +15899,6 @@
         "교내장학"
       ],
       "route_keywords": [
-        "교내장학",
         "성적장학",
         "청소년교육지원"
       ],
@@ -15741,7 +15956,6 @@
         "임대매장"
       ],
       "route_keywords": [
-        "국가근로",
         "봉사장학",
         "후생복지",
         "임대매장"
@@ -15799,7 +16013,6 @@
       ],
       "route_keywords": [
         "학생상해보험",
-        "보건진료실",
         "감염병"
       ],
       "negative_keywords": [],
@@ -15864,7 +16077,6 @@
       "route_keywords": [
         "통학버스담당",
         "사회봉사",
-        "해외봉사",
         "체육시설",
         "신입생OT"
       ],
@@ -15983,7 +16195,6 @@
       "route_keywords": [
         "향림대동제",
         "축제담당",
-        "총학생회",
         "동아리연합회",
         "학생포상"
       ],
@@ -16040,8 +16251,9 @@
       ],
       "route_keywords": [
         "장애학생",
-        "장애학생지원센터",
-        "장애학생쉼터"
+        "장애학생쉼터",
+        "장애인",
+        "장애인지원"
       ],
       "negative_keywords": [],
       "browse_hidden": false
@@ -16571,7 +16783,6 @@
         "해외교류"
       ],
       "route_keywords": [
-        "교환학생",
         "해외대학",
         "교류대학",
         "해외교류"
@@ -16748,7 +16959,6 @@
       ],
       "route_keywords": [
         "TOPIK",
-        "모의토익",
         "토익사관학교",
         "외국어강좌"
       ],
@@ -16910,7 +17120,6 @@
         "문의"
       ],
       "route_keywords": [
-        "정보공개",
         "공용차량",
         "교직원수련원"
       ],
@@ -17024,7 +17233,6 @@
       ],
       "route_keywords": [
         "게스트하우스",
-        "국제문화컨벤션관",
         "범민홀"
       ],
       "negative_keywords": [],
@@ -17192,7 +17400,6 @@
       ],
       "route_keywords": [
         "등록금담당",
-        "등록금납부",
         "세입"
       ],
       "negative_keywords": [],
@@ -18160,7 +18367,6 @@
       "route_keywords": [
         "SSO",
         "통합로그인",
-        "소프트웨어라이선스",
         "정보보안"
       ],
       "negative_keywords": [],
@@ -18610,7 +18816,6 @@
       ],
       "route_keywords": [
         "e캠퍼스오류",
-        "LMS",
         "원격수업",
         "온라인강의"
       ],
@@ -18714,7 +18919,6 @@
         "문의"
       ],
       "route_keywords": [
-        "향림취업향상포인트",
         "취업통계"
       ],
       "negative_keywords": [],
@@ -18767,7 +18971,6 @@
         "추천"
       ],
       "route_keywords": [
-        "해외취업",
         "채용설명회",
         "지역인재7급"
       ],
@@ -18828,10 +19031,7 @@
         "진로취업상담"
       ],
       "route_keywords": [
-        "자소서",
-        "입사지원서",
-        "면접클리닉",
-        "진로취업상담"
+        "자소서"
       ],
       "negative_keywords": [],
       "browse_hidden": false
@@ -19001,7 +19201,9 @@
         "반납",
         "연체",
         "이용자관리",
-        "휴학생도서관"
+        "휴학생도서관",
+        "대출반납",
+        "대출반납문의"
       ],
       "negative_keywords": [],
       "browse_hidden": false
@@ -19285,10 +19487,7 @@
         "생활관상담"
       ],
       "route_keywords": [
-        "관생선발",
-        "입실",
-        "퇴실",
-        "생활관상담"
+        "관생선발"
       ],
       "negative_keywords": [],
       "browse_hidden": false
@@ -20082,8 +20281,6 @@
       ],
       "route_keywords": [
         "인권침해",
-        "성희롱",
-        "성폭력",
         "인권센터"
       ],
       "negative_keywords": [],
@@ -20312,7 +20509,6 @@
         "창업경진대회"
       ],
       "route_keywords": [
-        "창업동아리",
         "창업경진대회",
         "창업캠프"
       ],
@@ -20481,7 +20677,6 @@
         "청년글로벌셀러"
       ],
       "route_keywords": [
-        "창업보육센터",
         "입주기업",
         "청년글로벌셀러",
         "청년창업사관학교"
@@ -20886,7 +21081,8 @@
         "언론사"
       ],
       "negative_keywords": [],
-      "browse_hidden": false
+      "browse_hidden": false,
+      "canonical_id": "press_media_support"
     },
     {
       "id": "route_lab_equipment",
@@ -22207,7 +22403,6 @@
       "route_keywords": [
         "AI인재양성부트캠프",
         "AI부트캠프",
-        "AURA",
         "바이브코딩",
         "AI인재양성부트캠프사업단",
         "AI인재양성사업단",
@@ -25233,7 +25428,9 @@
         "네이버클라우드부트캠프",
         "메가존클라우드부트캠프",
         "소버린AI",
-        "에이전틱AI"
+        "에이전틱AI",
+        "AI부트캠프교육",
+        "AI비교과교육"
       ],
       "negative_keywords": [],
       "browse_hidden": true
@@ -25301,7 +25498,8 @@
         "AXOPENLAB",
         "AX오픈랩",
         "AI전자책",
-        "생성형AIGPT"
+        "생성형AIGPT",
+        "AURA"
       ],
       "negative_keywords": [],
       "browse_hidden": false,
@@ -25367,14 +25565,14 @@
       ],
       "search_terms": [
         "청년도약",
-        "미취업 청년",
         "AI 커리어",
         "AI 취업 부트캠프"
       ],
       "route_keywords": [
         "청년도약AI인재양성",
         "청년도약AI부트캠프",
-        "미취업청년AI"
+        "미취업청년AI",
+        "AI취업부트캠프"
       ],
       "negative_keywords": [],
       "browse_hidden": true
@@ -25429,13 +25627,17 @@
       ],
       "domain": "library",
       "kind": "workflow",
-      "browse_hidden": false
+      "browse_hidden": false,
+      "route_keywords": [
+        "주말도서대출",
+        "공휴일도서대출"
+      ]
     }
   ],
   "metadata": {
-    "version": "5.4.8",
-    "service_count": 411,
-    "catalog_verified_at": "2026-08-26",
+    "version": "5.4.16",
+    "service_count": 413,
+    "catalog_verified_at": "2026-08-27",
     "schema_version": "2026-08-23-v5.3",
     "ambiguous_standalone_terms": [
       "세입",
@@ -25487,7 +25689,7 @@
         "verified_at"
       ]
     },
-    "last_verified": "2026-08-26",
-    "verified_at": "2026-08-26"
+    "last_verified": "2026-08-27",
+    "verified_at": "2026-08-27"
   }
 }
