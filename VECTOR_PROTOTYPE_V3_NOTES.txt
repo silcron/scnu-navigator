@@ -1,0 +1,17 @@
+어디가? Vector Prototype v3 calibration build
+- production app.js/search_core.js/scnu_services.json/index.html/styles.css/api remain unchanged.
+- Vector live remains OFF.
+- v2 input audit: 33 positive / 6 abstain, Top1 18/33.
+- v3 architecture:
+  * 413 services -> 2393 prototypes
+  * title/situation/description/strong-alias/curated semantic-hint prototypes
+  * noisy search_terms are NOT embedded as a monolithic oracle
+  * directory/organization kinds excluded from live Vector candidates
+  * service semantic guards for collision-prone workflows
+  * it_network_server is Vector-canonicalized to route_it_network (same department/phone)
+  * mild workflow > broad route bias
+- Audit:
+  * original 39 retained unchanged
+  * 33 extra guard/control cases
+  * total 72
+- Thresholds 0.86/0.035 are still provisional and MUST NOT be used to enable production.

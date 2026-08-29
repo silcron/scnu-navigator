@@ -3,50 +3,56 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>어디가? Vector Build / Audit</title>
+<title>어디가? Vector Prototype v3 Build / Audit</title>
 <style>
-body{font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif;max-width:900px;margin:40px auto;padding:0 20px;line-height:1.55;color:#111827}button{padding:10px 14px;margin:4px;border:1px solid #9ca3af;border-radius:8px;background:#fff;cursor:pointer}button:disabled{opacity:.45;cursor:not-allowed}pre{background:#f3f4f6;padding:14px;border-radius:10px;white-space:pre-wrap;word-break:break-word;max-height:520px;overflow:auto}.warn{background:#fff7ed;border:1px solid #fdba74;padding:12px;border-radius:10px}.ok{color:#047857;font-weight:700}.bad{color:#b91c1c;font-weight:700}
+body{font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif;max-width:940px;margin:40px auto;padding:0 20px;line-height:1.55;color:#111827}
+button{padding:10px 14px;margin:4px;border:1px solid #9ca3af;border-radius:8px;background:#fff;cursor:pointer}
+button:disabled{opacity:.45;cursor:not-allowed}pre{background:#f3f4f6;padding:14px;border-radius:10px;white-space:pre-wrap;word-break:break-word;max-height:560px;overflow:auto}
+.warn{background:#fff7ed;border:1px solid #fdba74;padding:12px;border-radius:10px}.note{background:#eff6ff;border:1px solid #93c5fd;padding:12px;border-radius:10px}
 </style>
 </head>
 <body>
-<h1>어디가? Vector Build / Audit</h1>
-<p class="warn">개발용 페이지입니다. 기존 keyword 검색에는 영향을 주지 않습니다. 모델은 브라우저에서만 실행되고, 최초 실행 시 Hugging Face 모델 파일을 다운로드합니다.</p>
-<p>모델: <code>Xenova/multilingual-e5-small</code> / Transformers.js 4.2.0 / WASM(CPU) / q8 / mean pooling / L2 normalize</p>
+<h1>어디가? Vector Prototype v3 Build / Audit</h1>
+<p class="warn">개발용 calibration 페이지입니다. 메인 keyword/Gemini 검색에는 영향을 주지 않습니다. Vector live는 OFF입니다.</p>
+<p class="note">v3 변경: 413개 서비스 각각을 하나의 긴 문장이 아니라 <b>2,393개의 query-like prototype</b>으로 분리해 임베딩합니다. 충돌 서비스에는 의미 기반 guard를 적용하고, 학과/조직 directory는 live Vector 후보에서 제외합니다.</p>
+<p>모델: <code>Xenova/multilingual-e5-small</code> / WASM(CPU) / q8 / mean pooling / L2 normalize</p>
 <div>
-<button id="build">1. 413개 service vector 생성</button>
-<button id="audit" disabled>2. calibration audit 실행</button>
-<button id="downloadVectors" disabled>vector_service_vectors.json 다운로드</button>
+<button id="build">1. prototype vector 생성</button>
+<button id="audit" disabled>2. v3 calibration audit 실행</button>
+<button id="downloadVectors" disabled>vector_service_vectors_v3.json 다운로드</button>
 <button id="copyVectors" disabled>vector JSON 복사</button>
-<button id="downloadAudit" disabled>vector_calibration_audit.json 다운로드</button>
+<button id="downloadAudit" disabled>vector_calibration_audit_v3.json 다운로드</button>
 <button id="copyAudit" disabled>audit JSON 복사</button>
 </div>
 <h2>진행 상태</h2><pre id="log">준비됨</pre>
 <h2>Audit 요약</h2><pre id="summary">아직 실행하지 않음</pre>
-<script src="./vector_semantic.js?v=7.3.35-a2-wasm"></script>
+<script src="./vector_semantic.js?v=7.3.35-a3-prototype"></script>
 <script>
 let vectorsDoc=null,auditDoc=null;
 const log=document.querySelector('#log'),summary=document.querySelector('#summary');
 function setLog(x){log.textContent=typeof x==='string'?x:JSON.stringify(x,null,2);}
 function append(x){log.textContent+='\n'+x;log.scrollTop=log.scrollHeight;}
 document.querySelector('#build').addEventListener('click',async e=>{
-  e.currentTarget.disabled=true;setLog('WASM(CPU) 모델 로딩 및 service vector 생성 시작...\n최초 실행 시 약 118MB q8 모델을 다운로드할 수 있습니다.');
+  e.currentTarget.disabled=true;
+  setLog('WASM(CPU) prototype vector 생성 시작...\n2,393개 prototype을 임베딩합니다. 최초/캐시 상태에 따라 시간이 걸릴 수 있습니다.');
   try{
-    vectorsDoc=await EodigaVector.buildStaticVectors({batch_size:12,on_progress:p=>setLog(`service vectors: ${p.done}/${p.total}\nelapsed: ${(p.elapsed_ms/1000).toFixed(1)}s\nmodel: ${EodigaVector.config.model}`)});
-    append(`\n완료: ${vectorsDoc.service_count}개 / ${vectorsDoc.embedding_dim}차원 / build ${(vectorsDoc.build_ms/1000).toFixed(1)}s`);
+    vectorsDoc=await EodigaVector.buildStaticVectors({batch_size:16,on_progress:p=>setLog(`prototype vectors: ${p.done}/${p.total}\nservices: ${p.services}\nelapsed: ${(p.elapsed_ms/1000).toFixed(1)}s`)});
+    append(`\n완료: ${vectorsDoc.service_count} services / ${vectorsDoc.prototype_count} prototypes / build ${(vectorsDoc.build_ms/1000).toFixed(1)}s`);
     document.querySelector('#audit').disabled=false;document.querySelector('#downloadVectors').disabled=false;document.querySelector('#copyVectors').disabled=false;
   }catch(err){append('\nERROR: '+(err?.stack||err));e.currentTarget.disabled=false;}
 });
 document.querySelector('#audit').addEventListener('click',async e=>{
-  if(!vectorsDoc)return;e.currentTarget.disabled=true;setLog('calibration audit 시작...');
+  if(!vectorsDoc)return;e.currentTarget.disabled=true;setLog('v3 calibration audit 시작...');
   try{
     auditDoc=await EodigaVector.evaluateAudit({vectors_doc:vectorsDoc,on_progress:p=>setLog(`audit: ${p.done}/${p.total}\ncase: ${p.case_id}\nelapsed: ${(p.elapsed_ms/1000).toFixed(1)}s`)});
-    summary.textContent=JSON.stringify(auditDoc.summary,null,2);append('\nAUDIT COMPLETE');
+    summary.textContent=JSON.stringify({overall:auditDoc.summary,original_39:auditDoc.original_39_summary,extended:auditDoc.extended_summary},null,2);
+    append('\nAUDIT COMPLETE');
     document.querySelector('#downloadAudit').disabled=false;document.querySelector('#copyAudit').disabled=false;
   }catch(err){append('\nAUDIT ERROR: '+(err?.stack||err));e.currentTarget.disabled=false;}
 });
-document.querySelector('#downloadVectors').addEventListener('click',()=>vectorsDoc&&EodigaVector.downloadJson(vectorsDoc,'vector_service_vectors.json'));
+document.querySelector('#downloadVectors').addEventListener('click',()=>vectorsDoc&&EodigaVector.downloadJson(vectorsDoc,'vector_service_vectors_v3.json'));
 document.querySelector('#copyVectors').addEventListener('click',async()=>{if(vectorsDoc){await navigator.clipboard.writeText(JSON.stringify(vectorsDoc));append('\nvector JSON을 클립보드에 복사했습니다.');}});
-document.querySelector('#downloadAudit').addEventListener('click',()=>auditDoc&&EodigaVector.downloadJson(auditDoc,'vector_calibration_audit.json'));
+document.querySelector('#downloadAudit').addEventListener('click',()=>auditDoc&&EodigaVector.downloadJson(auditDoc,'vector_calibration_audit_v3.json'));
 document.querySelector('#copyAudit').addEventListener('click',async()=>{if(auditDoc){await navigator.clipboard.writeText(JSON.stringify(auditDoc));append('\naudit JSON을 클립보드에 복사했습니다.');}});
 </script>
 </body></html>
