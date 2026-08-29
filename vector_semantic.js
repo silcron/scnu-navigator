@@ -2,21 +2,22 @@
 'use strict';
 
 const CONFIG={
-  version:'7.3.35-vector-audit-3-prototype',
+  version:'7.3.35-vector-audit-4-policy-rerank',
   live_enabled:false,
   transformers_url:'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0',
   model:'Xenova/multilingual-e5-small',
   dtype:'q8',
   query_prefix:'query: ',
   prototypes_url:'./vector_service_prototypes.json',
-  vectors_url:'./vector_service_vectors_v3.json',
-  audit_url:'./vector_audit_cases_v3.json',
+  vectors_url:'./vector_service_vectors_v4.json',
+  audit_url:'./vector_audit_cases_v4.json',
   embedding_dim:384,
   // Still provisional. v3 changes the score function, so final thresholds must
   // be selected from the new audit rather than copied from v2.
   min_score:0.86,
   min_margin:0.035,
   max_candidates:5,
+  required_group_bonus:0.012,
   excluded_kinds:['organization_registry','academic_directory','academic_directory_general'],
   kind_bias:{workflow:0.004,official_route:0.0,department_route:-0.003}
 };
@@ -167,7 +168,7 @@ async function buildStaticVectors({batch_size=16,on_progress=null}={}){
 }
 
 function decodeStaticVectors(doc){
-  if(!doc||doc.schema_version!==2||doc.embedding_dim!==CONFIG.embedding_dim||
+  if(!doc||!Number.isInteger(doc.schema_version)||doc.schema_version<2||doc.embedding_dim!==CONFIG.embedding_dim||
      !Array.isArray(doc.service_ids)||!Array.isArray(doc.prototype_service_indices)||
      !doc.vector_data_base64) throw new Error('vector_file_invalid');
   const bytes=base64ToBytes(doc.vector_data_base64);
@@ -194,8 +195,22 @@ function candidateAllowed(queryNorm,serviceIndex,store){
   if(CONFIG.excluded_kinds.includes(kind))return false;
   const p=store.service_policies?.[serviceIndex]||{};
   if(Array.isArray(p.required_any)&&p.required_any.length&&!includesAny(queryNorm,p.required_any))return false;
+  if(Array.isArray(p.required_groups)&&p.required_groups.length){
+    for(const group of p.required_groups){
+      if(Array.isArray(group)&&group.length&&!includesAny(queryNorm,group))return false;
+    }
+  }
   if(Array.isArray(p.forbidden_any)&&p.forbidden_any.length&&includesAny(queryNorm,p.forbidden_any))return false;
   return true;
+}
+function policyMatchBonus(queryNorm,serviceIndex,store){
+  const p=store.service_policies?.[serviceIndex]||{};
+  if(!Array.isArray(p.required_groups)||!p.required_groups.length)return 0;
+  let matched=0;
+  for(const group of p.required_groups){
+    if(Array.isArray(group)&&group.length&&includesAny(queryNorm,group))matched++;
+  }
+  return matched*CONFIG.required_group_bonus;
 }
 function kindBias(kind){
   const x=CONFIG.kind_bias?.[kind];
@@ -220,7 +235,7 @@ function rankWithQueryVector(query,queryVector,store,{exclude_ids=[]}={}){
     for(let k=0;k<dim;k++)dot+=queryVector[k]*(store.packed[base+k]/127);
     const raw=dot/(store.norms[pi]||1);
     const weighted=raw*(store.weights[pi]||1);
-    const adjusted=weighted+kindBias(store.service_kinds?.[si]||'');
+    const adjusted=weighted+kindBias(store.service_kinds?.[si]||'')+policyMatchBonus(q,si,store);
 
     const prev=best.get(targetId);
     if(!prev||adjusted>prev.score){
@@ -302,12 +317,14 @@ async function evaluateAudit({vectors_doc=null,on_progress=null}={}){
     await new Promise(r=>setTimeout(r,0));
   }
   const n0=Number(audit.original_case_count||0);
+  const nV3=Number(audit.v3_case_count||0);
   return {
-    schema_version:2,vector_version:CONFIG.version,created_at:new Date().toISOString(),model:CONFIG.model,model_load:lastLoadInfo,
-    provisional_thresholds:{min_score:CONFIG.min_score,min_margin:CONFIG.min_margin},
+    schema_version:4,vector_version:CONFIG.version,created_at:new Date().toISOString(),model:CONFIG.model,model_load:lastLoadInfo,
+    provisional_thresholds:{min_score:CONFIG.min_score,min_margin:CONFIG.min_margin,required_group_bonus:CONFIG.required_group_bonus},
     summary:summarize(results),
     original_39_summary:n0?summarize(results.slice(0,n0)):null,
-    extended_summary:n0?summarize(results.slice(n0)):null,
+    v3_72_summary:nV3?summarize(results.slice(0,nV3)):null,
+    stress_summary:nV3?summarize(results.slice(nV3)):null,
     results
   };
 }
