@@ -2,7 +2,7 @@
 'use strict';
 
 const CONFIG={
-  version:'7.3.35-vector-audit-1',
+  version:'7.3.35-vector-audit-2-wasm',
   live_enabled:false,
   transformers_url:'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0',
   model:'Xenova/multilingual-e5-small',
@@ -42,21 +42,29 @@ async function loadTransformers(){
 }
 
 async function createExtractor(){
-  const {pipeline}=await loadTransformers();
-  const attempts=[];
-  if(globalThis.navigator?.gpu)attempts.push({device:'webgpu',dtype:CONFIG.dtype});
-  attempts.push({device:'wasm',dtype:CONFIG.dtype});
-  attempts.push({dtype:CONFIG.dtype});
-  let lastErr=null;
-  for(const opts of attempts){
-    const t=now();
-    try{
-      const pipe=await pipeline('feature-extraction',CONFIG.model,opts);
-      lastLoadInfo={model:CONFIG.model,opts,load_ms:Math.round(now()-t)};
-      return pipe;
-    }catch(e){lastErr=e;}
+  // Build/audit is intentionally WASM-only. WebGPU is an optional production
+  // acceleration path and must never be required to generate/calibrate vectors.
+  // This also avoids contaminating ONNX Runtime's backend init chain when a
+  // browser exposes navigator.gpu but requestAdapter() still fails.
+  const {pipeline,env}=await loadTransformers();
+  try{
+    if(env?.backends?.onnx?.wasm){
+      // Prefer the broadly-compatible browser CPU backend for this one-time build.
+      // Keep the CDN-hosted WASM binaries selected by Transformers.js itself.
+      if('proxy' in env.backends.onnx.wasm) env.backends.onnx.wasm.proxy=false;
+    }
+  }catch(_){/* environment tuning is best-effort only */}
+
+  const opts={device:'wasm',dtype:CONFIG.dtype};
+  const t=now();
+  try{
+    const pipe=await pipeline('feature-extraction',CONFIG.model,opts);
+    lastLoadInfo={model:CONFIG.model,backend:'wasm',opts,load_ms:Math.round(now()-t)};
+    return pipe;
+  }catch(e){
+    const detail=String(e?.stack||e?.message||e);
+    throw new Error('vector_wasm_model_load_failed: '+detail);
   }
-  throw lastErr||new Error('vector_model_load_failed');
 }
 
 async function getExtractor(){

@@ -11,7 +11,7 @@ body{font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif;max-width:900
 <body>
 <h1>어디가? Vector Build / Audit</h1>
 <p class="warn">개발용 페이지입니다. 기존 keyword 검색에는 영향을 주지 않습니다. 모델은 브라우저에서만 실행되고, 최초 실행 시 Hugging Face 모델 파일을 다운로드합니다.</p>
-<p>모델: <code>Xenova/multilingual-e5-small</code> / Transformers.js 4.2.0 / q8 / mean pooling / L2 normalize</p>
+<p>모델: <code>Xenova/multilingual-e5-small</code> / Transformers.js 4.2.0 / WASM(CPU) / q8 / mean pooling / L2 normalize</p>
 <div>
 <button id="build">1. 413개 service vector 생성</button>
 <button id="audit" disabled>2. calibration audit 실행</button>
@@ -22,14 +22,14 @@ body{font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif;max-width:900
 </div>
 <h2>진행 상태</h2><pre id="log">준비됨</pre>
 <h2>Audit 요약</h2><pre id="summary">아직 실행하지 않음</pre>
-<script src="./vector_semantic.js?v=7.3.35-a1"></script>
+<script src="./vector_semantic.js?v=7.3.35-a2-wasm"></script>
 <script>
 let vectorsDoc=null,auditDoc=null;
 const log=document.querySelector('#log'),summary=document.querySelector('#summary');
 function setLog(x){log.textContent=typeof x==='string'?x:JSON.stringify(x,null,2);}
 function append(x){log.textContent+='\n'+x;log.scrollTop=log.scrollHeight;}
 document.querySelector('#build').addEventListener('click',async e=>{
-  e.currentTarget.disabled=true;setLog('모델 로딩 및 service vector 생성 시작...');
+  e.currentTarget.disabled=true;setLog('WASM(CPU) 모델 로딩 및 service vector 생성 시작...\n최초 실행 시 약 118MB q8 모델을 다운로드할 수 있습니다.');
   try{
     vectorsDoc=await EodigaVector.buildStaticVectors({batch_size:12,on_progress:p=>setLog(`service vectors: ${p.done}/${p.total}\nelapsed: ${(p.elapsed_ms/1000).toFixed(1)}s\nmodel: ${EodigaVector.config.model}`)});
     append(`\n완료: ${vectorsDoc.service_count}개 / ${vectorsDoc.embedding_dim}차원 / build ${(vectorsDoc.build_ms/1000).toFixed(1)}s`);

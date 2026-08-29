@@ -1,0 +1,15 @@
+Eodiga Vector Build Audit - WASM compatibility patch
+Version: 7.3.35-vector-audit-2-wasm
+
+Reason:
+- Previous build page tried WebGPU first.
+- On browsers where navigator.gpu exists but requestAdapter() fails, ONNX Runtime could stop at the WebGPU backend error before a clean WASM retry.
+
+Change:
+- vector build/audit uses WASM(CPU) only.
+- q8 multilingual-e5-small remains unchanged.
+- Production app/search files remain byte-identical to v7.3.34 production stable.
+- WebGPU will only be considered later as an optional production acceleration path after calibration.
+
+Core production app.js SHA256:
+bdf05cdd516ce1e229279b53cf3e800173fcd2a8edf1c60cef62db626315b276
