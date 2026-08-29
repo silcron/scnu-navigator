@@ -2489,6 +2489,33 @@ function mergeClassifierResult(localRoute,result,{partial=false,coverageAudit=fa
   // broad/conflicting candidates. Administrative facts still come only from these local service records.
   return {status:'answer',items:ai.slice(0,5).map((service,i)=>({service,score:9000-i})),reason:ai.length>1?'multi_intent':'classifier',confidence:'high',ai_assisted:true};
 }
+function vectorRuntimeEnabled(){
+  return Boolean(globalThis.EodigaVector?.liveEnabled&&typeof globalThis.EodigaVector?.resolveClauses==='function');
+}
+async function resolveVectorClausesSafely(clauses,lockedIds=[],maxAdd=5){
+  const clean=(clauses||[]).map(x=>String(x||'').trim()).filter(Boolean).slice(0,5);
+  if(!clean.length||maxAdd<=0)return {available:false,reason:'no_vector_slots',matches:[],unresolved_clauses:clean};
+  if(!vectorRuntimeEnabled())return {available:false,reason:'vector_live_disabled',matches:[],unresolved_clauses:clean};
+  try{
+    const out=await globalThis.EodigaVector.resolveClauses(clean,{locked_ids:(lockedIds||[]).slice(0,5),max_add:Math.max(0,Math.min(5,maxAdd))});
+    return out&&typeof out==='object'?out:{available:false,reason:'vector_invalid_result',matches:[],unresolved_clauses:clean};
+  }catch(e){
+    console.warn('[EodigaVector] fallback to Gemini:',e);
+    return {available:false,reason:'vector_error',matches:[],unresolved_clauses:clean};
+  }
+}
+function mergeVectorMatches(localRoute,vectorResult,{partial=false}={}){
+  const ids=[...new Set((vectorResult?.matches||[]).map(x=>x?.service_id).filter(Boolean))].slice(0,5);
+  if(!ids.length)return localRoute;
+  const merged=mergeClassifierResult(localRoute,{service_ids:ids},{partial,coverageAudit:false});
+  if(merged===localRoute)return localRoute;
+  merged.vector_assisted=true;
+  merged.ai_assisted=false;
+  merged.vector_matches=(vectorResult.matches||[]).slice(0,5).map(x=>({clause:x.clause,service_id:x.service_id,score:x.score,margin:x.margin}));
+  merged.reason=(merged.items||[]).length>1?'multi_intent':'vector';
+  return merged;
+}
+
 function renderAiClarification(result){
   const host=$('#resultSummary');if(!host)return;const box=document.createElement('section');box.className='unresolved-notice ai-clarification';
   const b=document.createElement('b');b.textContent='정확한 업무를 확정하기 어려워요.';const p=document.createElement('p');p.textContent='대상·장소·하려는 일을 조금 더 구체적으로 입력해주세요.';box.append(b,p);host.appendChild(box);
@@ -3193,19 +3220,30 @@ async function performSearch(options={}){
    const unresolved=findUnresolvedClauses(q);route.unresolved_clauses=unresolved;
    if(options.saveRecent!==false)addRecentSearch(q);renderSearchResult(q,route,ms);
    if(!shouldAssistMissingOnly(q,route)){if(unresolved.length)renderUnresolvedNotice(unresolved);return;}
-   setLoading(true);const matched=route.items.slice(0,5).map(x=>x.service.id);
-   // The existing deterministic engine stays authoritative. Gemini sees only the clauses that remained
-   // unresolved and may add missing service IDs into the remaining display slots; it never re-judges
-   // or replaces the services already found by the local engine.
-   classifyUncertainQuery(q,{assist_mode:'missing_only',matched_service_ids:matched,unresolved_clauses:unresolved}).then(r=>{
+   setLoading(true);
+   const initiallyMatched=route.items.slice(0,5).map(x=>x.service.id);
+   const slots=Math.max(0,5-initiallyMatched.length);
+   if(slots<=0){if(unresolved.length)renderUnresolvedNotice(unresolved);setLoading(false);return;}
+   const vectorResult=await resolveVectorClausesSafely(unresolved,initiallyMatched,slots);
+   if(requestId!==searchSequence||$('#searchInput').value.trim()!==q){setLoading(false);return;}
+   let workingRoute=mergeVectorMatches(route,vectorResult,{partial:true});
+   const mergedIds=new Set((workingRoute.items||[]).map(x=>x?.service?.id).filter(Boolean));
+   const droppedVectorClauses=(vectorResult?.matches||[]).filter(x=>!mergedIds.has(x?.service_id)).map(x=>x?.clause).filter(Boolean);
+   const remaining=[...new Set([...(vectorResult?.available?(vectorResult.unresolved_clauses||[]):unresolved),...droppedVectorClauses])];
+   if(workingRoute!==route)renderSearchResult(q,workingRoute,ms);
+   if(!remaining.length){setLoading(false);return;}
+   const matched=workingRoute.items.slice(0,5).map(x=>x.service.id);
+   // Exact/keyword results remain locked. Vector may fill only unresolved clauses; Gemini receives only
+   // clauses that remain unresolved after Vector and can use only the remaining display slots.
+   classifyUncertainQuery(q,{assist_mode:'missing_only',matched_service_ids:matched,unresolved_clauses:remaining}).then(r=>{
      if(requestId!==searchSequence||$('#searchInput').value.trim()!==q)return;
-     if(r?.mode!=='classifier'){renderUnresolvedNotice(unresolved);return;}
-     if(r.confidence!=='high'||r.needs_clarification||r.coverage_complete!==true){renderUnresolvedNotice(unresolved);renderAiClarification(r);return;}
-     const merged=mergeClassifierResult(route,r,{partial:true,coverageAudit:false});
-     const stillUnresolved=unresolvedAfterClassifier(unresolved,r);
-     if(merged!==route)renderSearchResult(q,merged,ms);
+     if(r?.mode!=='classifier'){renderUnresolvedNotice(remaining);return;}
+     if(r.confidence!=='high'||r.needs_clarification||r.coverage_complete!==true){renderUnresolvedNotice(remaining);renderAiClarification(r);return;}
+     const merged=mergeClassifierResult(workingRoute,r,{partial:true,coverageAudit:false});
+     const stillUnresolved=unresolvedAfterClassifier(remaining,r);
+     if(merged!==workingRoute)renderSearchResult(q,merged,ms);
      if(stillUnresolved.length)renderUnresolvedNotice(stillUnresolved);
-   }).catch(()=>{if(requestId===searchSequence)renderUnresolvedNotice(unresolved);}).finally(()=>{if(requestId===searchSequence)setLoading(false);});return;
+   }).catch(()=>{if(requestId===searchSequence)renderUnresolvedNotice(remaining);}).finally(()=>{if(requestId===searchSequence)setLoading(false);});return;
  }
  const hardAiBlockedReasons=new Set(['out_of_scope_other_university','role_mismatch']);
  // FULL Gemini is not a catch-all for every local miss.  The positive gate itself owns the
@@ -3215,6 +3253,15 @@ async function performSearch(options={}){
  const canAssist=location.protocol!=='file:' && !hardAiBlockedReasons.has(route.reason) && fullGate.allow;
  if(!canAssist){renderNoResult(q);return;}
  renderAssistPending();setLoading(true);
+ const vectorResult=await resolveVectorClausesSafely([q],[],1);
+ if(requestId!==searchSequence||$('#searchState').classList.contains('hidden')||$('#searchInput').value.trim()!==q){setLoading(false);return;}
+ if(vectorResult?.matches?.length){
+   const picked=mergeVectorMatches({status:'unknown',items:[],reason:route.reason},vectorResult,{partial:false});
+   if(picked.status==='answer'&&picked.items?.length){
+     if(options.saveRecent!==false)addRecentSearch(q);
+     renderSearchResult(q,picked,ms);setLoading(false);return;
+   }
+ }
  classifyUncertainQuery(q,{assist_mode:'full'}).then(r=>{
    if(requestId!==searchSequence||$('#searchState').classList.contains('hidden')||$('#searchInput').value.trim()!==q)return;
    if(r?.mode!=='classifier'){renderNoResult(q);return;}
@@ -3261,7 +3308,7 @@ function renderSearchResult(q,route,ms=0){
  window.scrollTo({top:$('#searchState').offsetTop-35,behavior:'smooth'});
 }
 globalThis.EodigaDebug={
- version:'7.3.34-WIP',
+ version:'7.3.35-WIP',
  search(query){
    const q=String(query||'').slice(0,300);
    const route=searchCampusServices(q);
@@ -3274,7 +3321,7 @@ globalThis.EodigaDebug={
    const route=searchCampusServices(q);
    const unresolved=route?.status==='answer'&&route?.items?.length?findUnresolvedClauses(q):[];
    const fullGate=fullAssistGate(q,route);
-   return {version:'7.3.34-WIP',route_status:route?.status||null,route_reason:route?.reason||null,multi_source:route?.multi_source||null,matched_service_ids:(route?.items||[]).slice(0,5).map(x=>x.service?.id).filter(Boolean),unresolved_clauses:unresolved,full_gate:fullGate,will_call_full:location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_call_missing_only:location.protocol!=='file:'&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route))};
+   return {version:'7.3.35-WIP',route_status:route?.status||null,route_reason:route?.reason||null,multi_source:route?.multi_source||null,matched_service_ids:(route?.items||[]).slice(0,5).map(x=>x.service?.id).filter(Boolean),unresolved_clauses:unresolved,full_gate:fullGate,vector_live_enabled:vectorRuntimeEnabled(),will_try_vector_full:vectorRuntimeEnabled()&&location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_try_vector_missing_only:vectorRuntimeEnabled()&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route)),will_call_full:location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_call_missing_only:location.protocol!=='file:'&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route))};
  }
 };
 

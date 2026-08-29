@@ -2,8 +2,8 @@
 'use strict';
 
 const CONFIG={
-  version:'7.3.35-vector-audit-7-return-guards',
-  live_enabled:false,
+  version:'7.3.35-vector-live-candidate',
+  live_enabled:true,
   transformers_url:'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0',
   model:'Xenova/multilingual-e5-small',
   dtype:'q8',
@@ -16,6 +16,7 @@ const CONFIG={
   // be selected from the new audit rather than copied from v2.
   min_score:0.92,
   min_margin:0.01,
+  no_auto_accept_ids:['return'],
   max_candidates:5,
   required_group_bonus:0.012,
   excluded_kinds:['organization_registry','academic_directory','academic_directory_general'],
@@ -261,8 +262,9 @@ function rankWithQueryVector(query,queryVector,store,{exclude_ids=[]}={}){
 function decisionFromRanked(ranked){
   const first=ranked[0]||null,second=ranked[1]||null;
   const margin=first&&second?first.score-second.score:null;
-  const accepted=Boolean(first&&first.score>=CONFIG.min_score&&(margin==null||margin>=CONFIG.min_margin));
-  return {accepted,service_id:accepted?first.id:null,score:first?.score??null,margin,top:ranked};
+  const autoAcceptBlocked=Boolean(first&&CONFIG.no_auto_accept_ids.includes(first.id));
+  const accepted=Boolean(first&&!autoAcceptBlocked&&first.score>=CONFIG.min_score&&(margin==null||margin>=CONFIG.min_margin));
+  return {accepted,service_id:accepted?first.id:null,score:first?.score??null,margin,auto_accept_blocked:autoAcceptBlocked,top:ranked};
 }
 async function rankQuery(query,{exclude_ids=[]}={}){
   const store=await loadStaticVectors({required:false});
