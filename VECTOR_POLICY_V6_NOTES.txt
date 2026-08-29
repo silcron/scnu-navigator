@@ -1,0 +1,9 @@
+Vector audit v6
+- Based on v5 static 2,393 prototype embeddings; no re-embedding required.
+- Final threshold candidate under test: min_score=0.92, min_margin=0.01.
+- Structural boundary fixes:
+  1) return: recognizes post-leave phrases such as '휴학을 마치', '휴학 후', '휴학이 끝', '학교로 복귀'.
+  2) military_return: extra +0.012 specificity bonus only when BOTH military-completion and return-to-school groups match.
+  3) route_student_internal_scholarship: extra +0.015 route precedence bonus only when BOTH scholarship and department/contact groups match.
+- Existing 122 v5 cases retained; 14 new targeted stress cases added (136 total).
+- Main production search remains untouched/live vector OFF in this audit package.
