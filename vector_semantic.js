@@ -2,15 +2,15 @@
 'use strict';
 
 const CONFIG={
-  version:'7.3.35-vector-audit-6-boundary-precedence',
+  version:'7.3.35-vector-audit-7-return-guards',
   live_enabled:false,
   transformers_url:'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0',
   model:'Xenova/multilingual-e5-small',
   dtype:'q8',
   query_prefix:'query: ',
   prototypes_url:'./vector_service_prototypes.json',
-  vectors_url:'./vector_service_vectors_v6.json',
-  audit_url:'./vector_audit_cases_v6.json',
+  vectors_url:'./vector_service_vectors_v7.json',
+  audit_url:'./vector_audit_cases_v7.json',
   embedding_dim:384,
   // Still provisional. v3 changes the score function, so final thresholds must
   // be selected from the new audit rather than copied from v2.
@@ -344,15 +344,17 @@ async function evaluateAudit({vectors_doc=null,on_progress=null}={}){
   const nV3=Number(audit.v3_case_count||0);
   const nV4=Number(audit.v4_case_count||0);
   const nV5=Number(audit.v5_case_count||0);
+  const nV6=Number(audit.v6_case_count||0);
   return {
-    schema_version:6,vector_version:CONFIG.version,created_at:new Date().toISOString(),model:CONFIG.model,model_load:lastLoadInfo,
+    schema_version:7,vector_version:CONFIG.version,created_at:new Date().toISOString(),model:CONFIG.model,model_load:lastLoadInfo,
     provisional_thresholds:{min_score:CONFIG.min_score,min_margin:CONFIG.min_margin,required_group_bonus:CONFIG.required_group_bonus},
     summary:summarize(results),
     original_39_summary:n0?summarize(results.slice(0,n0)):null,
     v3_72_summary:nV3?summarize(results.slice(0,nV3)):null,
     v4_104_summary:nV4?summarize(results.slice(0,nV4)):null,
     v5_122_summary:nV5?summarize(results.slice(0,nV5)):null,
-    v6_stress_summary:nV5?summarize(results.slice(nV5)):null,
+    v6_136_summary:nV6?summarize(results.slice(0,nV6)):null,
+    v7_stress_summary:nV6?summarize(results.slice(nV6)):null,
     threshold_sweep:thresholdSweep(results),
     results
   };

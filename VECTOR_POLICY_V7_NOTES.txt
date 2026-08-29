@@ -1,0 +1,10 @@
+Vector v7 return-guard calibration
+
+- No re-embedding. Reuses the same 2,393 prototype vectors.
+- military_return now requires BOTH military-completion context and school-return context.
+- military completion phrase coverage expanded (군 복무를 끝..., 군대를 마치..., etc.).
+- general return now requires BOTH prior leave/rest context and return-to-school intent.
+- This blocks generic phrases such as "다음 학기 학교에 다시 가야 할 것 같아요" from being auto-accepted as 복학.
+- Threshold remains provisional at score >= 0.92 and margin >= 0.01; v7 audit decides finalization.
+- All previous 136 cases are preserved; 18 targeted cases appended (154 total).
+- Vector live remains OFF.

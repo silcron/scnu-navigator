@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>어디가? Vector v6 Boundary Audit</title>
+<title>어디가? Vector v7 Return Guard Audit</title>
 <style>
 body{font-family:system-ui,-apple-system,"Noto Sans KR",sans-serif;max-width:940px;margin:40px auto;padding:0 20px;line-height:1.55;color:#111827}
 button{padding:10px 14px;margin:4px;border:1px solid #9ca3af;border-radius:8px;background:#fff;cursor:pointer}
@@ -12,18 +12,18 @@ button:disabled{opacity:.45;cursor:not-allowed}pre{background:#f3f4f6;padding:14
 </style>
 </head>
 <body>
-<h1>어디가? Vector v6 Boundary Audit</h1>
+<h1>어디가? Vector v7 Return Guard Audit</h1>
 <p class="warn">개발용 calibration 페이지입니다. 메인 keyword/Gemini 검색에는 영향을 주지 않습니다. Vector live는 OFF입니다.</p>
-<p class="note">v6는 v3의 2,393개 prototype vector를 그대로 사용합니다. 재임베딩 없이 군복학 표현 경계와 교내장학 workflow specificity 정책을 검증합니다. 기존 v4 104개 + 신규 stress 18개 = 총 122개를 검사합니다.</p>
+<p class="note">v7은 기존 2,393개 prototype vector를 그대로 사용합니다. 재임베딩 없이 일반복학/군복학 admission guard를 검증합니다. 기존 136개를 모두 보존하고 신규 stress 18개를 추가해 총 154개를 검사합니다.</p>
 <p>모델: <code>Xenova/multilingual-e5-small</code> / WASM(CPU) / q8 / mean pooling / L2 normalize</p>
 <div>
-<button id="audit">1. v6 calibration audit 실행</button>
-<button id="downloadAudit" disabled>vector_calibration_audit_v6.json 다운로드</button>
+<button id="audit">1. v7 calibration audit 실행</button>
+<button id="downloadAudit" disabled>vector_calibration_audit_v7.json 다운로드</button>
 <button id="copyAudit" disabled>audit JSON 복사</button>
 </div>
 <h2>진행 상태</h2><pre id="log">준비됨. v3 vector 파일은 배포본에 포함되어 있어 다시 생성할 필요가 없습니다.</pre>
 <h2>Audit 요약</h2><pre id="summary">아직 실행하지 않음</pre>
-<script src="./vector_semantic.js?v=7.3.35-a5-boundary"></script>
+<script src="./vector_semantic.js?v=7.3.35-a7-return-guards"></script>
 <script>
 let auditDoc=null;
 const log=document.querySelector('#log'),summary=document.querySelector('#summary');
@@ -31,7 +31,7 @@ function setLog(x){log.textContent=typeof x==='string'?x:JSON.stringify(x,null,2
 function append(x){log.textContent+='\n'+x;log.scrollTop=log.scrollHeight;}
 document.querySelector('#audit').addEventListener('click',async e=>{
   e.currentTarget.disabled=true;
-  setLog('v6 boundary calibration audit 시작...\n122개 query embedding + 2,393 prototype ranking을 검사합니다.');
+  setLog('v7 return-guard calibration audit 시작...\n154개 query embedding + 2,393 prototype ranking을 검사합니다.');
   try{
     auditDoc=await EodigaVector.evaluateAudit({on_progress:p=>setLog(`audit: ${p.done}/${p.total}\ncase: ${p.case_id}\nelapsed: ${(p.elapsed_ms/1000).toFixed(1)}s`)});
     summary.textContent=JSON.stringify({
@@ -39,7 +39,8 @@ document.querySelector('#audit').addEventListener('click',async e=>{
       original_39:auditDoc.original_39_summary,
       v3_72:auditDoc.v3_72_summary,
       v4_104:auditDoc.v4_104_summary,
-      v6_stress:auditDoc.v6_stress_summary,
+      v6_136:auditDoc.v6_136_summary,
+      v7_stress:auditDoc.v7_stress_summary,
       threshold_sweep:auditDoc.threshold_sweep
     },null,2);
     append('\nAUDIT COMPLETE');
@@ -47,7 +48,7 @@ document.querySelector('#audit').addEventListener('click',async e=>{
     document.querySelector('#copyAudit').disabled=false;
   }catch(err){append('\nAUDIT ERROR: '+(err?.stack||err));e.currentTarget.disabled=false;}
 });
-document.querySelector('#downloadAudit').addEventListener('click',()=>auditDoc&&EodigaVector.downloadJson(auditDoc,'vector_calibration_audit_v6.json'));
+document.querySelector('#downloadAudit').addEventListener('click',()=>auditDoc&&EodigaVector.downloadJson(auditDoc,'vector_calibration_audit_v7.json'));
 document.querySelector('#copyAudit').addEventListener('click',async()=>{if(auditDoc){await navigator.clipboard.writeText(JSON.stringify(auditDoc));append('\naudit JSON을 클립보드에 복사했습니다.');}});
 </script>
 </body></html>
