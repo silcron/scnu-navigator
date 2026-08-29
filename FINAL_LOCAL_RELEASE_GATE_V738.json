@@ -1,0 +1,97 @@
+{
+  "version": "7.3.38-WIP",
+  "services": 413,
+  "title_search": {
+    "total": 413,
+    "raw_id_match": 411,
+    "department_pass": 413,
+    "department_fail": 0
+  },
+  "situation_search": {
+    "total": 1942,
+    "raw_id_match": 1889,
+    "department_pass": 1937,
+    "department_fail": 5,
+    "known_nonblocking": [
+      {
+        "id": "route_startup_club",
+        "q": "창업동아리 문의",
+        "got": [
+          "startup_club"
+        ],
+        "reason": "wrapped_exact_title"
+      },
+      {
+        "id": "directory_aerospace_materials",
+        "q": "컴퓨터 학과",
+        "got": [
+          "directory_academic_units_general"
+        ],
+        "reason": "keyword_exact"
+      },
+      {
+        "id": "directory_aerospace_materials",
+        "q": "컴퓨터 전공",
+        "got": [
+          "directory_academic_units_general"
+        ],
+        "reason": "keyword_exact"
+      },
+      {
+        "id": "directory_education_college",
+        "q": "컴퓨터 학과",
+        "got": [
+          "directory_academic_units_general"
+        ],
+        "reason": "keyword_exact"
+      },
+      {
+        "id": "directory_education_college",
+        "q": "컴퓨터 전공",
+        "got": [
+          "directory_academic_units_general"
+        ],
+        "reason": "keyword_exact"
+      }
+    ]
+  },
+  "strong_literals": {
+    "total": 1178,
+    "raw_id_pass": 1103,
+    "department_pass": 1178,
+    "department_fail": 0
+  },
+  "facets": {
+    "total": 2478,
+    "raw_name_pass": 2475,
+    "name_equivalent": 3,
+    "organization_pass": 2478,
+    "organization_fail": 0
+  },
+  "multi_2_to_5": {
+    "total": 20000,
+    "raw_id_pass": 19990,
+    "raw_id_diff": 10,
+    "department_pass": 20000,
+    "department_fail": 0,
+    "department_failures": []
+  },
+  "fresh_natural_language": {
+    "total": 52,
+    "pass": 52,
+    "fail": 0
+  },
+  "specificity_guards": {
+    "total": 22,
+    "raw_pass": 21,
+    "department_pass": 22,
+    "department_fail": 0
+  },
+  "vector_policy_unchanged": true,
+  "notes": [
+    "Five situation department mismatches are pre-existing intentional/ambiguous cases: startup-club title wrapper and 컴퓨터 학과/전공 ambiguity.",
+    "Facet 3 raw department-name differences are 도서관 학술정보과 vs 학술정보과, same organization.",
+    "20,000 multi raw-ID differences are canonical/route twins in the same department; wrong department 0.",
+    "The 20,000 multi corpus was rerun after adding the sentence-evidence gate. The only later code change was pre-discharge specificity inside that sentence-only natural resolver, which cannot activate on the keyword-list corpus."
+  ]
+}

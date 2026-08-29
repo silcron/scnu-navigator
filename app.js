@@ -2054,14 +2054,113 @@ const LOCAL_NL_ACTION={
   changeCourse:/(빼고\s*싶|빼려|빼야|삭제|취소|철회|바꾸|변경|정정)/i,
   registerCourse:/(수강신청|신청.{0,5}(?:하고|싶|해야|하려|할\s*거|하러)|과목.{0,3}담|담고\s*싶|등록.{0,5}(?:하고|싶|해야|하려)|듣고\s*싶)/i,
   enterDorm:/(입사|들어가고\s*싶|들어가려|살고\s*싶|신청.{0,4}(?:하고|싶))/i,
-  leaveDorm:/(퇴실|퇴관|방\s*(?:도\s*)?빼(?:야|고|려|고\s*싶)?|나가고\s*싶|나가려|(?:기숙사|생활관).{0,7}나가(?:야|고|려|고\s*싶)?)/i,
+  leaveDorm:/(퇴실|퇴관|퇴사|방\s*(?:도\s*)?빼(?:야|고|려|고\s*싶)?|나가고\s*싶|나가려|(?:기숙사|생활관).{0,7}나가(?:야|고|려|고\s*싶)?)/i,
   facilityProblem:/(고장|안\s*(?:돼|됨|되)|문제|누수|물\s*새|물이\s*새|물샘|망가)/i,
   apply:/(지원|신청|들어가고\s*싶|들어가려|선발|모집)/i
 };
 function localNlHas(query,terms=[]){const n=normalizeQuery(query);return terms.some(term=>n.includes(normalizeQuery(term)));}
+
+// High-confidence colloquial intent extraction ---------------------------------
+// Resolve *object + action/state* pairs, not memorized sentences. Multiple pairs can coexist
+// in one natural sentence, preserving the product contract that independent tasks own
+// independent result slots. Specific workflows outrank broad umbrella wording.
+function localNaturalStrongIntentIds(query){
+  const raw=String(query||'').normalize('NFKC').toLowerCase();
+  const n=normalizeQuery(raw);if(!n)return [];
+  const ids=[],seen=new Set();
+  const add=id=>{if(id&&!seen.has(id)&&services.some(s=>s.id===id)){seen.add(id);ids.push(id);}};
+  const campus=/(순천대|순천대학교|국립순천대학교|학교|교내|캠퍼스|학과|학부|대학|학생)/i.test(raw);
+  const military=localNlHas(raw,LOCAL_NL_LEXICON.military)||/(전역|군복무)/i.test(raw);
+  const pause=LOCAL_NL_ACTION.pause.test(raw);
+  const discharge=/(전역|군복무.{0,6}(?:끝|마치|종료)|군대.{0,4}(?:다녀|갔다))/i.test(raw);
+  const preDischarge=/(전역\s*(?:전|하기\s*전|예정)|아직.{0,5}전역|전역.{0,4}안\s*(?:했|한)|미전역)/i.test(raw);
+  const returnStudy=LOCAL_NL_ACTION.resume.test(raw)||/(?:다시|재차).{0,6}(?:학교|대학)?\s*(?:다니|등교|복귀)|(?:학교|대학).{0,7}(?:다시\s*)?(?:다니|복귀|돌아)|복학/i.test(raw);
+  const illness=/(질병|건강\s*문제|몸\s*상태|아프|아픈|아파|치료|진단|입원|수술)/i.test(raw);
+
+  // Academic leave/return specificity: military return > military leave > illness leave > general leave.
+  if(military&&preDischarge&&returnStudy)add('return_before_discharge');
+  else if(military&&discharge&&!preDischarge&&returnStudy)add('military_return');
+  else if(military&&pause)add('leave_military');
+  else if(illness&&pause)add('leave_illness');
+  else if(!military&&pause&&(campus||/학업|휴학|학기/.test(raw)))add('leave_general');
+
+  // Student identity card replacement/loss.
+  const externalCard=/(신용|체크|은행|카드사|법인|교통|하이패스|멤버십|포인트)\s*카드/i.test(raw);
+  const studentCard=localNlHas(raw,LOCAL_NL_LEXICON.studentCard)||(campus&&/(?:^|\s)id\s*카드/i.test(raw))||(!externalCard&&/학생증|학교\s*카드|학생\s*카드/i.test(raw));
+  if(studentCard&&(LOCAL_NL_ACTION.replace.test(raw)||/(?:새로|다시).{0,8}(?:준비|마련)/i.test(raw)))add('student_id_reissue');
+
+  // Dormitory action/state pairs. Facility faults stay with the facility route; personal/life
+  // difficulties asking for counseling go to dorm counseling rather than a broad dorm umbrella.
+  const dorm=localNlHas(raw,LOCAL_NL_LEXICON.dorm);
+  const dormPhysicalProblem=/(고장|누수|물\s*새|물이\s*새|물샘|망가|시설|전기|전등|조명|콘센트|에어컨|냉방|난방|수도|화장실|배관|문고리|창문)/i.test(raw);
+  if(dorm&&dormPhysicalProblem)add('dorm_facility_report_board');
+  if(dorm&&LOCAL_NL_ACTION.leaveDorm.test(raw))add('dorm_move_out');
+  if(dorm&&/(상담|도움|고민|누구.{0,4}말|어디.{0,4}말)/i.test(raw)
+     &&/(불편|갈등|고민|힘들|적응|생활|사람|룸메|문제)/i.test(raw)
+     &&!dormPhysicalProblem)add('dorm_counsel');
+
+  // Campus sports-facility use requests.
+  if(/(?:실내\s*)?체육관|농구장/i.test(raw)&&/(예약|신청|사용|이용|쓰고\s*싶|빌리)/i.test(raw))add('gym');
+  if(/풋살(?:장|구장)/i.test(raw)&&/(예약|신청|사용|이용|쓰고\s*싶|빌리)/i.test(raw))add('futsal');
+
+  // Career clinics. Generic "취업 준비" alone must not manufacture the AI solution card;
+  // each concrete clinic owns its own action/object pair.
+  if(/자소서|자기소개서|이력서|입사지원서/i.test(raw)&&/(첨삭|봐주|검토|클리닉|상담|도움|고쳐)/i.test(raw))add('resume');
+  if(/면접/i.test(raw)&&/(연습|모의|코칭|클리닉|준비|봐주|도움)/i.test(raw)&&!/(ai|인공지능)/i.test(raw))add('interview');
+
+  // Scholarship: preserve specific national-scholarship ownership; otherwise use the broad guide.
+  if(/국가\s*장학금|국장/i.test(raw))add('sch_national');
+  else if(/장학(?:금)?/i.test(raw)&&/(궁금|어떻게|알고|문의|종류|받을|같이|되는지|알아보)/i.test(raw))add('scholarship_guide');
+
+  // Certificates: "성적표" is a transcript request, not proof of current enrollment.
+  if(/성적표/i.test(raw)&&/(필요|발급|뽑|떼|받|증명|서류|문서|출력)/i.test(raw))add('cert_transcript');
+
+  // Major/department change outranks generic course-change verbs even when the sentence also
+  // mentions currently enrolled classes or credits.
+  if(!/전공\s*과목/i.test(raw)&&/(?:학과|전공)(?:를|을)?\s*(?:바꾸|옮기)|다른\s*(?:학과|전공).{0,5}(?:가|옮)/i.test(raw))add('major_transfer');
+
+  // IT incidents: separate endpoint/device support from network support. Dorm network wording
+  // remains owned by the dormitory-specific route.
+  const itProblem=/(안\s*(?:돼|되|됨)|먹통|오류|고장|문제|끊|접속\s*안|연결\s*안)/i.test(raw);
+  if(/컴퓨터|\bpc\b|프린터|전화기|vdi/i.test(raw)&&itProblem)add('route_it_pc_printer');
+  if(!dorm&&/인터넷|네트워크|웹메일/i.test(raw)&&itProblem)add('route_it_network');
+  if(dorm&&/인터넷|와이파이|wifi|랜선/i.test(raw)&&itProblem)add('dorm_internet');
+
+  // Startup club/program participation is a specific startup-education route, not a generic club.
+  if(/창업/i.test(raw)&&/동아리|캠프|경진대회/i.test(raw)&&/(참여|활동|들어가|가입|신청|지원|궁금|알아보)/i.test(raw))add('route_startup_club');
+
+  return ids.slice(0,5);
+}
+function localNaturalSentenceEvidence(query){
+  const raw=String(query||'').normalize('NFKC').toLowerCase();
+  if(raw.length<8)return false;
+  // Morphology/discourse evidence that the input is a sentence rather than a whitespace list of
+  // official task names/keywords. Keep this deliberately grammar-focused; task nouns alone do not count.
+  return /(?:하고|받고|쓰고|다니고|바꾸고|옮기고|쉬고|참여하고|들어가고|알고)\s*싶|(?:하려면|하려고|려고\s*해|하려|해야\s*해|해야돼|해야\s*돼|해야|되는지|될까|가능한지)|(?:싶은데|했는데|됐는데|되는데|생겼는데|있는데|없는데)|(?:때문에|하면서|같이\s*어떻게|둘\s*다)|(?:필요해|궁금해|알고\s*싶)|(?:어디(?:서|에|로)?\s*(?:해|말|문의|가|신청|상담))|(?:안\s*되고|안\s*되는데|안\s*돼)|(?:잃어버렸|분실했|퇴사도|퇴실도)|(?:받을\s*수\s*있|할\s*수\s*있)/i.test(raw);
+}
+function localNaturalStrongSingleRoute(query){
+  const raw=String(query||'').trim();
+  const ids=localNaturalStrongIntentIds(raw);if(ids.length!==1)return null;
+  // Never let a whole-sentence single interpretation swallow a real explicit second task.
+  // Atomic relationship workflows (e.g. military return) may contain conjunction-like morphology
+  // inside one task and are therefore allowed through this guard.
+  if((splitMultiIntent(raw).length>=2||hasExplicitEnumerationSyntax(raw))&&!ATOMIC_MULTI_GUARD_IDS.has(ids[0]))return null;
+  // Keep terse keyword/official-title enumeration on the mature keyword engine.
+  if(!localNaturalSentenceEvidence(raw))return null;
+  const service=services.find(s=>s.id===ids[0]);if(!service)return null;
+  return {status:'answer',items:[{service,score:9880}],reason:'local_natural',local_semantic:true};
+}
+function localNaturalMultiRoute(query){
+  if(!localNaturalSentenceEvidence(query))return null;
+  const ids=localNaturalStrongIntentIds(query);if(ids.length<2)return null;
+  const items=ids.map((id,i)=>({service:services.find(s=>s.id===id),score:9870-i})).filter(x=>x.service);
+  if(items.length<2)return null;
+  return {status:'answer',items:items.slice(0,5),reason:'multi_intent',broad:true,total_intents:items.length,truncated_count:Math.max(0,items.length-5),multi_source:'local_object_action'};
+}
 function localNaturalRouteId(query){
   const raw=String(query||'').normalize('NFKC').toLowerCase();
   const n=normalizeQuery(raw);if(!n)return null;
+  const strongIds=localNaturalStrongIntentIds(raw);if(strongIds.length===1)return strongIds[0];
   const campus=/(순천대|순천대학교|국립순천대학교|학교|교내|캠퍼스|학과|학부|대학|학생)/i.test(raw);
 
   // Student ID: colloquial "school card" + replacement/loss semantics.
@@ -2099,6 +2198,7 @@ function localNaturalRouteId(query){
 
   // High-confidence action/object combinations for other frequent student wording.
   if(/등록금|학비/i.test(raw)&&/(나눠|나누어|분할|분납|몇\s*번.{0,4}내)/i.test(raw))return 'tuition_installment';
+  if(!/전공\s*과목/i.test(raw)&&/(?:학과|전공)(?:를|을)?\s*(?:바꾸|옮기)|다른\s*(?:학과|전공).{0,5}(?:가|옮)/i.test(raw))return 'major_transfer';
   if(localNlHas(raw,LOCAL_NL_LEXICON.course)&&LOCAL_NL_ACTION.changeCourse.test(raw))return 'course_change';
   if(localNlHas(raw,LOCAL_NL_LEXICON.course)&&LOCAL_NL_ACTION.registerCourse.test(raw)&&!LOCAL_NL_ACTION.changeCourse.test(raw))return 'course_registration';
   if(/장학/i.test(raw)&&/(국가근로|국근|학교.{0,6}일하면서|교내.{0,6}일하면서|근로.{0,4}장학)/i.test(raw))return 'sch_work';
@@ -2440,7 +2540,23 @@ function searchCampusServices(query,metaGuard=false){
   });
   const exactSituation=hasStrongFacetBase?null:exactSituationPriorityRoute(query);
   if(exactSituation)return dedupeRouteIntentItems(exactSituation);
-  if(!metaGuard){const explicitClauses=explicitSeparatedClauseKeywordRoute(query);if(explicitClauses)return dedupeRouteIntentItems(explicitClauses);}
+  // Specific object+action/state evidence in a sentence may be more precise than a broad P0/catalog
+  // co-occurrence. Exact official identities above remain absolute.
+  if(!metaGuard){
+    const localMulti=localNaturalMultiRoute(query);
+    const explicitClauses=explicitSeparatedClauseKeywordRoute(query);
+    if(localMulti&&explicitClauses){
+      const localGroups=new Set((localMulti.items||[]).map(x=>serviceIntentGroup(x.service)));
+      const explicitGroups=new Set((explicitClauses.items||[]).map(x=>serviceIntentGroup(x.service)));
+      // Never delete an explicit keyword lock. Use the natural multi route only when it preserves
+      // every locked intent and merely restores more specific/missing object+action slots.
+      if([...explicitGroups].every(g=>localGroups.has(g)))return dedupeRouteIntentItems(localMulti);
+      return dedupeRouteIntentItems(explicitClauses);
+    }
+    if(explicitClauses)return dedupeRouteIntentItems(explicitClauses);
+    if(localMulti)return dedupeRouteIntentItems(localMulti);
+    const localSingle=localNaturalStrongSingleRoute(query);if(localSingle)return dedupeRouteIntentItems(localSingle);
+  }
   // Keyword mode is the product's primary contract. Run it on the untouched input before
   // natural-language clause cleanup so separators that are part of official titles (·, /, &)
   // cannot destroy an otherwise exact 1~5 keyword enumeration.
@@ -3366,7 +3482,7 @@ function renderSearchResult(q,route,ms=0){
  window.scrollTo({top:$('#searchState').offsetTop-35,behavior:'smooth'});
 }
 globalThis.EodigaDebug={
- version:'7.3.37-WIP',
+ version:'7.3.38-WIP',
  search(query){
    const q=String(query||'').slice(0,300);
    const route=searchCampusServices(q);
@@ -3379,7 +3495,7 @@ globalThis.EodigaDebug={
    const route=searchCampusServices(q);
    const unresolved=route?.status==='answer'&&route?.items?.length?findUnresolvedClauses(q):[];
    const fullGate=fullAssistGate(q,route);
-   return {version:'7.3.37-WIP',route_status:route?.status||null,route_reason:route?.reason||null,multi_source:route?.multi_source||null,matched_service_ids:(route?.items||[]).slice(0,5).map(x=>x.service?.id).filter(Boolean),unresolved_clauses:unresolved,full_gate:fullGate,vector_live_enabled:vectorRuntimeEnabled(),will_try_vector_full:vectorRuntimeEnabled()&&location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_try_vector_missing_only:vectorRuntimeEnabled()&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route)),will_call_full:location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_call_missing_only:location.protocol!=='file:'&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route))};
+   return {version:'7.3.38-WIP',route_status:route?.status||null,route_reason:route?.reason||null,multi_source:route?.multi_source||null,matched_service_ids:(route?.items||[]).slice(0,5).map(x=>x.service?.id).filter(Boolean),unresolved_clauses:unresolved,full_gate:fullGate,vector_live_enabled:vectorRuntimeEnabled(),will_try_vector_full:vectorRuntimeEnabled()&&location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_try_vector_missing_only:vectorRuntimeEnabled()&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route)),will_call_full:location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_call_missing_only:location.protocol!=='file:'&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route))};
  }
 };
 
