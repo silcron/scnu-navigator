@@ -1,0 +1,1043 @@
+{
+  "schema_version": 4,
+  "description": "v5 policy-boundary calibration: preserves v4 104 cases and adds military-return / internal-scholarship boundary stress.",
+  "original_case_count": 39,
+  "v3_case_count": 72,
+  "stress_case_count": 32,
+  "cases": [
+    {
+      "id": "p_rotc_apply",
+      "type": "positive",
+      "query": "군대에서 장교로 복무할 수 있는 대학 프로그램에 지원하고 싶어",
+      "expected_id": "rotc_application",
+      "forbidden_ids": [
+        "rotc_info"
+      ]
+    },
+    {
+      "id": "p_counsel",
+      "type": "positive",
+      "query": "요즘 마음이 너무 힘들어서 학교에서 전문가와 이야기하고 싶어요",
+      "expected_id": "personal_counsel",
+      "forbidden_ids": [
+        "directory_education_college"
+      ]
+    },
+    {
+      "id": "p_unemployed_youth",
+      "type": "positive",
+      "query": "아직 취업을 못한 청년인데 학교에서 취업 도움을 받을 곳이 있나요",
+      "expected_id": "career_center_general",
+      "forbidden_ids": [
+        "ai_bootcamp_youth_program"
+      ]
+    },
+    {
+      "id": "p_3d",
+      "type": "positive",
+      "query": "입체 모형을 출력할 수 있는 학교 장비를 예약하고 싶어요",
+      "expected_id": "maker_3d_printer",
+      "forbidden_ids": [
+        "maker"
+      ]
+    },
+    {
+      "id": "p_student_id",
+      "type": "positive",
+      "query": "학교에서 쓰는 신원 확인 카드를 잃어버려서 다시 만들어야 해",
+      "expected_id": "student_id_reissue",
+      "forbidden_ids": [
+        "student_id_first"
+      ]
+    },
+    {
+      "id": "p_student_loan",
+      "type": "positive",
+      "query": "등록금 마련 때문에 정부 학자금을 빌리는 제도를 이용하고 싶어요",
+      "expected_id": "student_loan",
+      "forbidden_ids": [
+        "route_library_borrow"
+      ]
+    },
+    {
+      "id": "p_library_borrow",
+      "type": "positive",
+      "query": "도서관 책을 빌리고 반납하는 방법이 궁금해",
+      "expected_id": "route_library_borrow",
+      "forbidden_ids": [
+        "student_loan"
+      ]
+    },
+    {
+      "id": "p_dorm_out",
+      "type": "positive",
+      "query": "기숙사 생활을 그만하고 방을 빼려면 어떻게 해야 하나요",
+      "expected_id": "dorm_move_out",
+      "forbidden_ids": [
+        "withdrawal"
+      ]
+    },
+    {
+      "id": "p_withdrawal",
+      "type": "positive",
+      "query": "대학교를 완전히 그만두고 학적을 정리하고 싶어요",
+      "expected_id": "withdrawal",
+      "forbidden_ids": [
+        "dorm_move_out",
+        "leave_general"
+      ]
+    },
+    {
+      "id": "p_leave",
+      "type": "positive",
+      "query": "개인 사정 때문에 한 학기 정도 학교를 쉬고 싶어",
+      "expected_id": "leave_general",
+      "forbidden_ids": [
+        "withdrawal"
+      ]
+    },
+    {
+      "id": "p_return",
+      "type": "positive",
+      "query": "학교를 쉬고 있었는데 다음 학기부터 다시 다니고 싶어요",
+      "expected_id": "return",
+      "forbidden_ids": [
+        "readmission"
+      ]
+    },
+    {
+      "id": "p_health",
+      "type": "positive",
+      "query": "교내에 있다가 몸이 아픈데 간단히 진료받을 곳이 있나요",
+      "expected_id": "health_clinic",
+      "forbidden_ids": []
+    },
+    {
+      "id": "p_lost",
+      "type": "positive",
+      "query": "캠퍼스에서 제 물건을 잃어버렸는데 어디서 확인하나요",
+      "expected_id": "lost_item_board",
+      "forbidden_ids": [
+        "found_item_post"
+      ]
+    },
+    {
+      "id": "p_found",
+      "type": "positive",
+      "query": "학교에서 주운 물건을 주인에게 돌려주려고 등록하고 싶어요",
+      "expected_id": "found_item_post",
+      "forbidden_ids": [
+        "lost_item_board"
+      ]
+    },
+    {
+      "id": "p_shuttle",
+      "type": "positive",
+      "query": "학교까지 오갈 때 이용하는 통학 차량 정보를 알고 싶어요",
+      "expected_id": "shuttle",
+      "forbidden_ids": [
+        "school_vehicle"
+      ]
+    },
+    {
+      "id": "p_school_vehicle",
+      "type": "positive",
+      "query": "학과 행사에 학생들을 태우고 갈 학교 차량을 쓰고 싶어요",
+      "expected_id": "school_vehicle",
+      "forbidden_ids": [
+        "shuttle"
+      ]
+    },
+    {
+      "id": "p_webmail",
+      "type": "positive",
+      "query": "학교 이메일 계정에 접속이 안 되고 계속 오류가 나요",
+      "expected_id": "route_it_network",
+      "forbidden_ids": [
+        "ecampus"
+      ]
+    },
+    {
+      "id": "p_lms",
+      "type": "positive",
+      "query": "온라인 강의 듣는 학교 수업 사이트가 작동하지 않아요",
+      "expected_id": "route_innov_lms",
+      "forbidden_ids": [
+        "route_it_network"
+      ]
+    },
+    {
+      "id": "p_career",
+      "type": "positive",
+      "query": "앞으로 어떤 직무로 취업해야 할지 학교에서 상담받고 싶어요",
+      "expected_id": "career_counsel",
+      "forbidden_ids": [
+        "personal_counsel"
+      ]
+    },
+    {
+      "id": "p_resume",
+      "type": "positive",
+      "query": "회사에 낼 자기소개서와 입사지원서를 누가 봐줬으면 좋겠어요",
+      "expected_id": "resume",
+      "forbidden_ids": [
+        "career_counsel"
+      ]
+    },
+    {
+      "id": "p_interview",
+      "type": "positive",
+      "query": "취업 면접을 실제처럼 연습하고 피드백 받고 싶어요",
+      "expected_id": "interview",
+      "forbidden_ids": [
+        "ai_interview"
+      ]
+    },
+    {
+      "id": "p_major_transfer",
+      "type": "positive",
+      "query": "지금 다니는 학과에서 다른 학과로 옮기고 싶어요",
+      "expected_id": "major_transfer",
+      "forbidden_ids": [
+        "double_major"
+      ]
+    },
+    {
+      "id": "p_grad_req",
+      "type": "positive",
+      "query": "내가 졸업하려면 어떤 조건과 학점을 채워야 하는지 알고 싶어요",
+      "expected_id": "graduation_requirements",
+      "forbidden_ids": [
+        "cert_graduation"
+      ]
+    },
+    {
+      "id": "p_national_sch",
+      "type": "positive",
+      "query": "한국장학재단에서 주는 등록금 장학 지원을 받고 싶어요",
+      "expected_id": "sch_national",
+      "forbidden_ids": [
+        "student_loan"
+      ]
+    },
+    {
+      "id": "p_grade_sch",
+      "type": "positive",
+      "query": "성적이 좋은 학생에게 주는 교내 장학이 궁금해요",
+      "expected_id": "sch_grade",
+      "forbidden_ids": [
+        "grade_lookup"
+      ]
+    },
+    {
+      "id": "p_veteran_sch",
+      "type": "positive",
+      "query": "보훈 대상 학생이 받을 수 있는 학교 장학 제도를 찾고 있어요",
+      "expected_id": "sch_veteran",
+      "forbidden_ids": []
+    },
+    {
+      "id": "p_disability_device",
+      "type": "positive",
+      "query": "장애학생이 수업할 때 필요한 보조기기를 학교에서 지원받고 싶어요",
+      "expected_id": "disability_device",
+      "forbidden_ids": [
+        "health_loan"
+      ]
+    },
+    {
+      "id": "p_parking_new",
+      "type": "positive",
+      "query": "차를 학교에 계속 가지고 다니려고 정기 주차 등록을 처음 하려 해요",
+      "expected_id": "parking_new",
+      "forbidden_ids": [
+        "parking_extend"
+      ]
+    },
+    {
+      "id": "p_parking_extend",
+      "type": "positive",
+      "query": "이미 쓰고 있는 교내 정기 주차 등록 기간을 더 연장하고 싶어요",
+      "expected_id": "parking_extend",
+      "forbidden_ids": [
+        "parking_new"
+      ]
+    },
+    {
+      "id": "p_course_register",
+      "type": "positive",
+      "query": "다음 학기에 들을 과목을 학교 시스템에서 신청하려고 해요",
+      "expected_id": "course_registration",
+      "forbidden_ids": [
+        "course_change"
+      ]
+    },
+    {
+      "id": "p_course_change",
+      "type": "positive",
+      "query": "이미 신청한 수업 하나를 빼고 다른 과목으로 바꾸고 싶어요",
+      "expected_id": "course_change",
+      "forbidden_ids": [
+        "course_registration"
+      ]
+    },
+    {
+      "id": "p_grade_lookup",
+      "type": "positive",
+      "query": "이번 학기에 나온 내 점수를 학교 시스템에서 확인하고 싶어요",
+      "expected_id": "grade_lookup",
+      "forbidden_ids": [
+        "cert_transcript"
+      ]
+    },
+    {
+      "id": "p_transcript",
+      "type": "positive",
+      "query": "회사에 제출할 공식 대학 성적 서류를 발급받아야 해요",
+      "expected_id": "cert_transcript",
+      "forbidden_ids": [
+        "grade_lookup"
+      ]
+    },
+    {
+      "id": "a_counsel_generic",
+      "type": "abstain",
+      "query": "상담 받고 싶어요"
+    },
+    {
+      "id": "a_apply_generic",
+      "type": "abstain",
+      "query": "신청하고 싶어요"
+    },
+    {
+      "id": "a_location_generic",
+      "type": "abstain",
+      "query": "센터가 어디에 있어요"
+    },
+    {
+      "id": "a_reservation_generic",
+      "type": "abstain",
+      "query": "예약하려면 어떻게 해요"
+    },
+    {
+      "id": "a_document_generic",
+      "type": "abstain",
+      "query": "무슨 서류가 필요한가요"
+    },
+    {
+      "id": "a_money_generic",
+      "type": "abstain",
+      "query": "돈을 빌리고 싶어요"
+    },
+    {
+      "id": "g_military_return",
+      "type": "positive",
+      "query": "전역해서 다음 학기부터 학교에 복학하고 싶어",
+      "expected_id": "military_return",
+      "forbidden_ids": [
+        "rotc_application"
+      ]
+    },
+    {
+      "id": "g_rotc_concept",
+      "type": "positive",
+      "query": "대학에서 장교 후보생으로 복무하는 프로그램에 지원하고 싶어",
+      "expected_id": "rotc_application",
+      "forbidden_ids": [
+        "military_return"
+      ]
+    },
+    {
+      "id": "g_ai_youth",
+      "type": "positive",
+      "query": "미취업 청년 대상 인공지능 부트캠프 교육을 신청하고 싶어요",
+      "expected_id": "ai_bootcamp_youth_program",
+      "forbidden_ids": [
+        "career_center_general"
+      ]
+    },
+    {
+      "id": "g_unemployed_no_ai",
+      "type": "positive",
+      "query": "아직 취업하지 못했는데 학교 취업센터에서 도움을 받고 싶어요",
+      "expected_id": "career_center_general",
+      "forbidden_ids": [
+        "ai_bootcamp_youth_program"
+      ]
+    },
+    {
+      "id": "g_webmail",
+      "type": "positive",
+      "query": "학교 웹메일 로그인이 안 되고 메일이 열리지 않아요",
+      "expected_id": "route_it_network",
+      "forbidden_ids": [
+        "route_innov_lms"
+      ]
+    },
+    {
+      "id": "g_lms",
+      "type": "positive",
+      "query": "e캠퍼스에서 온라인 강의를 들으려는데 수업 사이트가 안 열려요",
+      "expected_id": "route_innov_lms",
+      "forbidden_ids": [
+        "route_it_network"
+      ]
+    },
+    {
+      "id": "g_career_counsel",
+      "type": "positive",
+      "query": "무슨 일을 해야 할지 진로 방향을 상담받고 싶어요",
+      "expected_id": "career_counsel",
+      "forbidden_ids": [
+        "route_career_clinic",
+        "personal_counsel"
+      ]
+    },
+    {
+      "id": "g_resume_route",
+      "type": "positive",
+      "query": "자기소개서 첨삭과 취업 서류 클리닉을 받고 싶어요",
+      "expected_id": "resume",
+      "forbidden_ids": [
+        "career_counsel"
+      ]
+    },
+    {
+      "id": "g_grad_leave",
+      "type": "positive",
+      "query": "휴학 중인데 졸업요건을 다 채우면 졸업할 수 있나요",
+      "expected_id": "graduation_while_on_leave",
+      "forbidden_ids": [
+        "graduation_requirements"
+      ]
+    },
+    {
+      "id": "g_grad_general",
+      "type": "positive",
+      "query": "졸업하려면 필요한 학점과 조건이 무엇인지 확인하고 싶어요",
+      "expected_id": "graduation_requirements",
+      "forbidden_ids": [
+        "graduation_while_on_leave"
+      ]
+    },
+    {
+      "id": "g_student_loan",
+      "type": "positive",
+      "query": "등록금과 생활비를 한국장학재단에서 대출받고 싶어요",
+      "expected_id": "student_loan",
+      "forbidden_ids": [
+        "cert_tuition",
+        "tuition_bill"
+      ]
+    },
+    {
+      "id": "g_tuition_cert",
+      "type": "positive",
+      "query": "연말정산에 낼 교육비 납입증명서를 발급받고 싶어요",
+      "expected_id": "cert_tuition",
+      "forbidden_ids": [
+        "student_loan"
+      ]
+    },
+    {
+      "id": "g_tuition_check",
+      "type": "positive",
+      "query": "등록금을 제대로 납부했는지 확인하고 싶어요",
+      "expected_id": "tuition_check",
+      "forbidden_ids": [
+        "student_loan"
+      ]
+    },
+    {
+      "id": "g_tuition_bill",
+      "type": "positive",
+      "query": "이번 학기 등록금 고지서를 출력하고 싶어요",
+      "expected_id": "tuition_bill",
+      "forbidden_ids": [
+        "student_loan"
+      ]
+    },
+    {
+      "id": "g_leave_extend",
+      "type": "positive",
+      "query": "휴학기간이 끝나가는데 한 학기 더 연장하고 싶어요",
+      "expected_id": "leave_extension",
+      "forbidden_ids": [
+        "return"
+      ]
+    },
+    {
+      "id": "g_return",
+      "type": "positive",
+      "query": "휴학을 끝내고 다음 학기부터 학교에 다시 다니고 싶어요",
+      "expected_id": "return",
+      "forbidden_ids": [
+        "leave_extension"
+      ]
+    },
+    {
+      "id": "g_internal_sch_route",
+      "type": "positive",
+      "query": "교내장학금 담당부서에 문의하고 싶어요",
+      "expected_id": "route_student_internal_scholarship",
+      "forbidden_ids": [
+        "sch_grade"
+      ]
+    },
+    {
+      "id": "g_grade_sch",
+      "type": "positive",
+      "query": "학점이 좋아서 받을 수 있는 성적우수 장학금을 알고 싶어요",
+      "expected_id": "sch_grade",
+      "forbidden_ids": [
+        "route_student_internal_scholarship"
+      ]
+    },
+    {
+      "id": "g_transfer_dup",
+      "type": "positive",
+      "query": "편입 때 인정받은 과목을 다시 재수강하면 학점이 중복되나요",
+      "expected_id": "transfer_duplicate_course",
+      "forbidden_ids": [
+        "course_registration"
+      ]
+    },
+    {
+      "id": "g_course_reg",
+      "type": "positive",
+      "query": "다음 학기에 들을 과목들을 온라인으로 수강 신청하고 싶어요",
+      "expected_id": "course_registration",
+      "forbidden_ids": [
+        "transfer_duplicate_course"
+      ]
+    },
+    {
+      "id": "g_retake_replace",
+      "type": "positive",
+      "query": "예전에 들은 과목이 폐지돼서 대체과목으로 재이수하려고 해요",
+      "expected_id": "retake_replace",
+      "forbidden_ids": [
+        "course_change"
+      ]
+    },
+    {
+      "id": "g_course_change",
+      "type": "positive",
+      "query": "신청한 수업을 하나 빼고 다른 과목으로 수강정정하고 싶어요",
+      "expected_id": "course_change",
+      "forbidden_ids": [
+        "retake_replace"
+      ]
+    },
+    {
+      "id": "g_major_transfer_credit",
+      "type": "positive",
+      "query": "전과 신청 전에 필요한 수료학점 조건을 확인하고 싶어요",
+      "expected_id": "major_transfer_credit_requirement",
+      "forbidden_ids": [
+        "grade_lookup"
+      ]
+    },
+    {
+      "id": "g_grade_lookup",
+      "type": "positive",
+      "query": "향림통에서 이번 학기 성적 점수를 확인하고 싶어요",
+      "expected_id": "grade_lookup",
+      "forbidden_ids": [
+        "major_transfer_credit_requirement"
+      ]
+    },
+    {
+      "id": "g_dorm_items",
+      "type": "positive",
+      "query": "기숙사에 전기장판을 가져가도 되는지 궁금해요",
+      "expected_id": "dorm_prohibited_items",
+      "forbidden_ids": [
+        "dorm_move_out"
+      ]
+    },
+    {
+      "id": "g_dorm_out",
+      "type": "positive",
+      "query": "기숙사 방을 정리하고 생활관에서 퇴실하려고 해요",
+      "expected_id": "dorm_move_out",
+      "forbidden_ids": [
+        "dorm_prohibited_items"
+      ]
+    },
+    {
+      "id": "g_student_card",
+      "type": "positive",
+      "query": "학생 신분 확인용 학교 카드를 잃어버려 새로 발급받고 싶어요",
+      "expected_id": "student_id_reissue",
+      "forbidden_ids": [
+        "lost_item_board"
+      ]
+    },
+    {
+      "id": "g_lost_generic",
+      "type": "positive",
+      "query": "학교에서 지갑을 잃어버렸는데 분실물 게시판에서 찾고 싶어요",
+      "expected_id": "lost_item_board",
+      "forbidden_ids": [
+        "student_id_reissue"
+      ]
+    },
+    {
+      "id": "a_generic_school_help",
+      "type": "abstain",
+      "query": "학교에서 도움을 받고 싶어요"
+    },
+    {
+      "id": "a_generic_problem",
+      "type": "abstain",
+      "query": "문제가 생겼는데 어디로 가야 하나요"
+    },
+    {
+      "id": "a_generic_online",
+      "type": "abstain",
+      "query": "온라인으로 하고 싶어요"
+    },
+    {
+      "id": "a_generic_change",
+      "type": "abstain",
+      "query": "변경하고 싶어요"
+    },
+    {
+      "id": "a_generic_support",
+      "type": "abstain",
+      "query": "지원받고 싶어요"
+    },
+    {
+      "id": "s_lib_borrow_1",
+      "type": "positive",
+      "query": "도서관에서 책을 대출하고 나중에 반납하려면 어떻게 해요",
+      "expected_id": "route_library_borrow",
+      "forbidden_ids": [
+        "library_general_contact",
+        "library"
+      ]
+    },
+    {
+      "id": "s_lib_borrow_2",
+      "type": "positive",
+      "query": "빌린 도서 반납이랑 연체 처리 문의하고 싶어요",
+      "expected_id": "route_library_borrow",
+      "forbidden_ids": [
+        "student_loan"
+      ]
+    },
+    {
+      "id": "s_lib_borrow_3",
+      "type": "positive",
+      "query": "도서관 책을 빌리는 절차와 반납 방법을 알고 싶어요",
+      "expected_id": "route_library_borrow",
+      "forbidden_ids": [
+        "library_general_contact"
+      ]
+    },
+    {
+      "id": "s_lib_general",
+      "type": "positive",
+      "query": "도서관 운영시간과 열람공간 이용이 궁금해요",
+      "expected_id": "library",
+      "forbidden_ids": [
+        "route_library_borrow"
+      ]
+    },
+    {
+      "id": "s_withdraw_1",
+      "type": "positive",
+      "query": "학교를 아예 그만두고 학적을 종료하고 싶어요",
+      "expected_id": "withdrawal",
+      "forbidden_ids": [
+        "leave_general",
+        "return"
+      ]
+    },
+    {
+      "id": "s_withdraw_2",
+      "type": "positive",
+      "query": "대학을 더 이상 다니지 않으려고 자퇴 절차를 알아보고 있어요",
+      "expected_id": "withdrawal",
+      "forbidden_ids": [
+        "leave_general"
+      ]
+    },
+    {
+      "id": "s_leave_1",
+      "type": "positive",
+      "query": "개인 사정으로 다음 학기 한 학기만 학교를 쉬려고 해요",
+      "expected_id": "leave_general",
+      "forbidden_ids": [
+        "return",
+        "withdrawal"
+      ]
+    },
+    {
+      "id": "s_leave_2",
+      "type": "positive",
+      "query": "학교를 잠시 쉬고 싶어서 일반휴학을 신청하려고 해요",
+      "expected_id": "leave_general",
+      "forbidden_ids": [
+        "return"
+      ]
+    },
+    {
+      "id": "s_return_1",
+      "type": "positive",
+      "query": "휴학을 마치고 학교에 다시 돌아오려고 해요",
+      "expected_id": "return",
+      "forbidden_ids": [
+        "leave_general",
+        "leave_extension"
+      ]
+    },
+    {
+      "id": "s_return_2",
+      "type": "positive",
+      "query": "쉬던 학교에 복학해서 다시 수업을 듣고 싶어요",
+      "expected_id": "return",
+      "forbidden_ids": [
+        "leave_general"
+      ]
+    },
+    {
+      "id": "s_military_return_1",
+      "type": "positive",
+      "query": "군복무를 마치고 학교에 복학하려고 합니다",
+      "expected_id": "military_return",
+      "forbidden_ids": [
+        "return",
+        "rotc_application"
+      ]
+    },
+    {
+      "id": "s_military_return_2",
+      "type": "positive",
+      "query": "제대했으니 다음 학기부터 다시 학교에 다니고 싶어요",
+      "expected_id": "military_return",
+      "forbidden_ids": [
+        "return"
+      ]
+    },
+    {
+      "id": "s_rotc_not_return",
+      "type": "positive",
+      "query": "대학 재학 중 장교 후보생 프로그램에 지원해서 군 장교가 되고 싶어요",
+      "expected_id": "rotc_application",
+      "forbidden_ids": [
+        "military_return"
+      ]
+    },
+    {
+      "id": "s_veteran_1",
+      "type": "positive",
+      "query": "국가유공자 자녀가 받을 수 있는 장학 지원이 궁금합니다",
+      "expected_id": "sch_veteran",
+      "forbidden_ids": [
+        "sch_grade",
+        "sch_national"
+      ]
+    },
+    {
+      "id": "s_veteran_2",
+      "type": "positive",
+      "query": "보훈 대상자 등록금 장학 제도를 찾고 있어요",
+      "expected_id": "sch_veteran",
+      "forbidden_ids": [
+        "sch_grade"
+      ]
+    },
+    {
+      "id": "s_grade_sch_not_vet",
+      "type": "positive",
+      "query": "성적이 우수해서 받을 수 있는 교내 장학을 알고 싶어요",
+      "expected_id": "sch_grade",
+      "forbidden_ids": [
+        "sch_veteran"
+      ]
+    },
+    {
+      "id": "s_grad_leave_1",
+      "type": "positive",
+      "query": "휴학생 상태인데 졸업요건을 채우면 졸업 가능한가요",
+      "expected_id": "graduation_while_on_leave",
+      "forbidden_ids": [
+        "graduation_requirements"
+      ]
+    },
+    {
+      "id": "s_grad_leave_2",
+      "type": "positive",
+      "query": "지금 휴학 중인데 졸업할 수 있는지 확인하고 싶어요",
+      "expected_id": "graduation_while_on_leave",
+      "forbidden_ids": [
+        "graduation_requirements"
+      ]
+    },
+    {
+      "id": "s_grad_general_2",
+      "type": "positive",
+      "query": "재학 중이고 졸업에 필요한 학점과 인증 조건을 확인하고 싶어요",
+      "expected_id": "graduation_requirements",
+      "forbidden_ids": [
+        "graduation_while_on_leave"
+      ]
+    },
+    {
+      "id": "s_internal_route_1",
+      "type": "positive",
+      "query": "교내 장학 담당 부서가 어디인지 문의하고 싶어요",
+      "expected_id": "route_student_internal_scholarship",
+      "forbidden_ids": [
+        "sch_internal",
+        "sch_grade"
+      ]
+    },
+    {
+      "id": "s_internal_route_2",
+      "type": "positive",
+      "query": "학교 장학금 담당자에게 문의하려면 어느 부서로 가야 하나요",
+      "expected_id": "route_student_internal_scholarship",
+      "forbidden_ids": [
+        "sch_internal"
+      ]
+    },
+    {
+      "id": "s_internal_workflow",
+      "type": "positive",
+      "query": "교내장학금을 신청하고 자격을 확인하고 싶어요",
+      "expected_id": "sch_internal",
+      "forbidden_ids": [
+        "route_student_internal_scholarship"
+      ]
+    },
+    {
+      "id": "s_tuition_loan",
+      "type": "positive",
+      "query": "등록금이 부족해서 학자금 대출을 받아야 해요",
+      "expected_id": "student_loan",
+      "forbidden_ids": [
+        "cert_tuition",
+        "tuition_bill"
+      ]
+    },
+    {
+      "id": "s_transcript",
+      "type": "positive",
+      "query": "취업 서류로 제출할 공식 성적증명서를 발급받고 싶어요",
+      "expected_id": "cert_transcript",
+      "forbidden_ids": [
+        "grade_lookup"
+      ]
+    },
+    {
+      "id": "s_grade_lookup",
+      "type": "positive",
+      "query": "이번 학기 내 성적과 점수를 시스템에서 조회하고 싶어요",
+      "expected_id": "grade_lookup",
+      "forbidden_ids": [
+        "cert_transcript"
+      ]
+    },
+    {
+      "id": "s_dorm_out",
+      "type": "positive",
+      "query": "생활관에서 나가려고 퇴실 절차를 알고 싶어요",
+      "expected_id": "dorm_move_out",
+      "forbidden_ids": [
+        "withdrawal"
+      ]
+    },
+    {
+      "id": "s_abstain_school",
+      "type": "abstain",
+      "query": "학교 관련해서 뭔가 물어보고 싶어요"
+    },
+    {
+      "id": "s_abstain_where",
+      "type": "abstain",
+      "query": "어디로 가야 하나요"
+    },
+    {
+      "id": "s_abstain_apply",
+      "type": "abstain",
+      "query": "이거 신청하는 방법 알려줘"
+    },
+    {
+      "id": "s_abstain_info",
+      "type": "abstain",
+      "query": "관련 정보를 알고 싶어요"
+    },
+    {
+      "id": "s_abstain_help",
+      "type": "abstain",
+      "query": "도움을 받을 수 있나요"
+    },
+    {
+      "id": "s_abstain_change",
+      "type": "abstain",
+      "query": "바꾸고 싶은데 어떻게 해야 해요"
+    },
+    {
+      "id": "v5_military_return_1",
+      "type": "positive",
+      "query": "제대한 뒤 다음 학기부터 학교에 다시 다니려고 해요",
+      "expected_id": "military_return",
+      "forbidden_ids": [
+        "return",
+        "rotc_application",
+        "readmission"
+      ]
+    },
+    {
+      "id": "v5_military_return_2",
+      "type": "positive",
+      "query": "군 복무를 마치고 학교로 돌아가 수업을 이어가고 싶어요",
+      "expected_id": "military_return",
+      "forbidden_ids": [
+        "return",
+        "rotc_application"
+      ]
+    },
+    {
+      "id": "v5_military_return_3",
+      "type": "positive",
+      "query": "군대 다녀와서 다음 학기 학교에 복귀하려고 합니다",
+      "expected_id": "military_return",
+      "forbidden_ids": [
+        "return",
+        "rotc_application"
+      ]
+    },
+    {
+      "id": "v5_military_return_4",
+      "type": "positive",
+      "query": "군대 갔다 와서 학교에 다시 다니고 싶어요",
+      "expected_id": "military_return",
+      "forbidden_ids": [
+        "return",
+        "rotc_application"
+      ]
+    },
+    {
+      "id": "v5_rotc_boundary_1",
+      "type": "positive",
+      "query": "학교 다니면서 장교 후보생 프로그램에 지원하고 싶어요",
+      "expected_id": "rotc_application",
+      "forbidden_ids": [
+        "military_return",
+        "return"
+      ]
+    },
+    {
+      "id": "v5_rotc_boundary_2",
+      "type": "positive",
+      "query": "대학 재학 중 군 장교가 되는 프로그램을 신청하려고 해요",
+      "expected_id": "rotc_application",
+      "forbidden_ids": [
+        "military_return"
+      ]
+    },
+    {
+      "id": "v5_return_general_1",
+      "type": "positive",
+      "query": "휴학을 마치고 다음 학기부터 다시 학교에 다니고 싶어요",
+      "expected_id": "return",
+      "forbidden_ids": [
+        "military_return",
+        "leave_extension"
+      ]
+    },
+    {
+      "id": "v5_return_general_2",
+      "type": "positive",
+      "query": "개인휴학 후 학교로 돌아가 수업을 이어가고 싶습니다",
+      "expected_id": "return",
+      "forbidden_ids": [
+        "military_return"
+      ]
+    },
+    {
+      "id": "v5_internal_workflow_1",
+      "type": "positive",
+      "query": "교내장학금 신청 자격과 대상 조건을 알고 싶어요",
+      "expected_id": "sch_internal",
+      "forbidden_ids": [
+        "route_student_internal_scholarship",
+        "sch_national",
+        "sch_grade"
+      ]
+    },
+    {
+      "id": "v5_internal_workflow_2",
+      "type": "positive",
+      "query": "교내 장학을 신청하려는데 누가 받을 수 있는지 자격이 궁금해요",
+      "expected_id": "sch_internal",
+      "forbidden_ids": [
+        "route_student_internal_scholarship",
+        "sch_national"
+      ]
+    },
+    {
+      "id": "v5_internal_route_1",
+      "type": "positive",
+      "query": "교내장학 담당 부서에 신청 관련 문의를 하고 싶어요",
+      "expected_id": "route_student_internal_scholarship",
+      "forbidden_ids": [
+        "sch_internal"
+      ]
+    },
+    {
+      "id": "v5_national_sch_boundary",
+      "type": "positive",
+      "query": "국가장학금 신청 자격과 소득 기준을 알고 싶어요",
+      "expected_id": "sch_national",
+      "forbidden_ids": [
+        "sch_internal"
+      ]
+    },
+    {
+      "id": "v5_grade_sch_boundary",
+      "type": "positive",
+      "query": "성적 우수자가 받을 수 있는 교내 장학금 조건이 궁금해요",
+      "expected_id": "sch_grade",
+      "forbidden_ids": [
+        "sch_internal"
+      ]
+    },
+    {
+      "id": "v5_external_sch_boundary",
+      "type": "positive",
+      "query": "외부 기관에서 주는 교외장학금 신청 자격을 알고 싶어요",
+      "expected_id": "sch_external",
+      "forbidden_ids": [
+        "sch_internal",
+        "sch_national"
+      ]
+    },
+    {
+      "id": "v5_abstain_military",
+      "type": "abstain",
+      "query": "군대 관련해서 학교에 문의하고 싶어요"
+    },
+    {
+      "id": "v5_abstain_scholarship",
+      "type": "abstain",
+      "query": "장학금 신청하고 싶어요"
+    },
+    {
+      "id": "v5_abstain_return",
+      "type": "abstain",
+      "query": "다음 학기 학교 관련해서 뭘 해야 하나요"
+    },
+    {
+      "id": "v5_abstain_eligibility",
+      "type": "abstain",
+      "query": "신청 자격이 궁금해요"
+    }
+  ],
+  "v4_case_count": 104,
+  "v5_stress_case_count": 18
+}

@@ -2,15 +2,15 @@
 'use strict';
 
 const CONFIG={
-  version:'7.3.35-vector-audit-4-policy-rerank',
+  version:'7.3.35-vector-audit-5-policy-boundary',
   live_enabled:false,
   transformers_url:'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0',
   model:'Xenova/multilingual-e5-small',
   dtype:'q8',
   query_prefix:'query: ',
   prototypes_url:'./vector_service_prototypes.json',
-  vectors_url:'./vector_service_vectors_v4.json',
-  audit_url:'./vector_audit_cases_v4.json',
+  vectors_url:'./vector_service_vectors_v5.json',
+  audit_url:'./vector_audit_cases_v5.json',
   embedding_dim:384,
   // Still provisional. v3 changes the score function, so final thresholds must
   // be selected from the new audit rather than copied from v2.
@@ -205,12 +205,19 @@ function candidateAllowed(queryNorm,serviceIndex,store){
 }
 function policyMatchBonus(queryNorm,serviceIndex,store){
   const p=store.service_policies?.[serviceIndex]||{};
-  if(!Array.isArray(p.required_groups)||!p.required_groups.length)return 0;
-  let matched=0;
-  for(const group of p.required_groups){
-    if(Array.isArray(group)&&group.length&&includesAny(queryNorm,group))matched++;
+  let bonus=0;
+  if(Array.isArray(p.required_groups)&&p.required_groups.length){
+    let matched=0;
+    for(const group of p.required_groups){
+      if(Array.isArray(group)&&group.length&&includesAny(queryNorm,group))matched++;
+    }
+    bonus+=matched*CONFIG.required_group_bonus;
   }
-  return matched*CONFIG.required_group_bonus;
+  if(Array.isArray(p.conditional_groups)&&p.conditional_groups.length){
+    const allMatched=p.conditional_groups.every(group=>Array.isArray(group)&&group.length&&includesAny(queryNorm,group));
+    if(allMatched)bonus+=Number.isFinite(+p.conditional_bonus)?+p.conditional_bonus:0;
+  }
+  return bonus;
 }
 function kindBias(kind){
   const x=CONFIG.kind_bias?.[kind];
@@ -301,6 +308,23 @@ function summarize(results){
   };
 }
 
+function thresholdReport(results,score,margin){
+  const accepted=results.filter(x=>Number.isFinite(x.score)&&x.score>=score&&(x.margin==null||x.margin>=margin));
+  const correct=accepted.filter(x=>x.type==='positive'&&x.top1_correct).length;
+  const wrongPositive=accepted.filter(x=>x.type==='positive'&&!x.top1_correct).length;
+  const wrongAbstain=accepted.filter(x=>x.type==='abstain').length;
+  return {min_score:score,min_margin:margin,accepted:accepted.length,correct,wrong_positive:wrongPositive,wrong_abstain:wrongAbstain};
+}
+function thresholdSweep(results){
+  return [
+    thresholdReport(results,0.86,0.035),
+    thresholdReport(results,0.92,0.01),
+    thresholdReport(results,0.925,0.01),
+    thresholdReport(results,0.93,0.0),
+    thresholdReport(results,0.94,0.0)
+  ];
+}
+
 async function evaluateAudit({vectors_doc=null,on_progress=null}={}){
   const store=vectors_doc?decodeStaticVectors(vectors_doc):await loadStaticVectors({required:true});
   const audit=await fetchJson(CONFIG.audit_url,true);
@@ -318,13 +342,16 @@ async function evaluateAudit({vectors_doc=null,on_progress=null}={}){
   }
   const n0=Number(audit.original_case_count||0);
   const nV3=Number(audit.v3_case_count||0);
+  const nV4=Number(audit.v4_case_count||0);
   return {
-    schema_version:4,vector_version:CONFIG.version,created_at:new Date().toISOString(),model:CONFIG.model,model_load:lastLoadInfo,
+    schema_version:5,vector_version:CONFIG.version,created_at:new Date().toISOString(),model:CONFIG.model,model_load:lastLoadInfo,
     provisional_thresholds:{min_score:CONFIG.min_score,min_margin:CONFIG.min_margin,required_group_bonus:CONFIG.required_group_bonus},
     summary:summarize(results),
     original_39_summary:n0?summarize(results.slice(0,n0)):null,
     v3_72_summary:nV3?summarize(results.slice(0,nV3)):null,
-    stress_summary:nV3?summarize(results.slice(nV3)):null,
+    v4_104_summary:nV4?summarize(results.slice(0,nV4)):null,
+    v5_stress_summary:nV4?summarize(results.slice(nV4)):null,
+    threshold_sweep:thresholdSweep(results),
     results
   };
 }

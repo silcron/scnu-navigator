@@ -1,0 +1,7 @@
+어디가? Vector v5 boundary audit
+- production core files unchanged
+- reuses the existing 2,393 q8 prototype embeddings; no re-embedding required
+- military_return guard expanded only for completed-service + school-return semantic pairs
+- sch_internal gets +0.024 only when BOTH '교내장학' and application/eligibility intent are present
+- preserves v4 104 cases and adds 18 boundary stress cases (122 total)
+- includes threshold sweep report; Vector live remains OFF
