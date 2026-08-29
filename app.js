@@ -985,6 +985,21 @@ function explicitEnumerationRepeatedSameIntent(raw){
 }
 function explicitKeywordEnumerationRoute(query,baseRoute=null){
  const raw=String(query||'').trim();if(!raw||!/[\s·]/.test(raw))return null;
+ // SearchCore already resolves protected relationship workflows as one atomic intent. When the
+ // same query is an explicit 2~5 intent list, never let this lower-level whitespace enumerator
+ // split a proven atomic workflow back into a broad inner keyword (e.g. 일반휴학) plus fragments.
+ // This is generic over the existing ATOMIC_MULTI_GUARD_IDS set rather than sentence-specific.
+ const atomicCore=globalThis.EodigaSearchCore?.resolve?.(raw,services);
+ const atomicCoreItems=(atomicCore?.items||[]).filter(x=>x?.service);
+ if(atomicCore?.status==='answer'&&atomicCoreItems.length>=2&&atomicCoreItems.some(x=>ATOMIC_MULTI_GUARD_IDS.has(x.service.id))){
+   const out=[],seenGroups=new Set();
+   for(const item of atomicCoreItems){
+     const group=serviceIntentGroup(item.service);if(!group||seenGroups.has(group))continue;
+     seenGroups.add(group);out.push({service:item.service,score:10030-out.length,source_keyword:'search_core_atomic_multi'});if(out.length>=5)break;
+   }
+   if(out.length>=2)return {status:'answer',items:out,reason:'multi_intent',broad:true,total_intents:seenGroups.size,truncated_count:Math.max(0,atomicCoreItems.length-5),multi_source:'search_core_atomic_multi'};
+ }
+
  // Comma/slash/plus/newline enumerations are already handled by the mature clause parser. This
  // fallback specifically closes the whitespace/middle-dot gap without changing those paths.
  if(/[,;，；/＋+&＆|\n]/.test(raw))return null;
@@ -994,6 +1009,27 @@ function explicitKeywordEnumerationRoute(query,baseRoute=null){
  if(explicitEnumerationRepeatedSameIntent(raw))return null;
  const parts=raw.replace(/[·]+/g,' ').split(/\s+/).map(x=>x.trim()).filter(Boolean);
  if(parts.length<2||parts.length>12)return null;
+ // Protect a registered multi-token atomic relationship as one slot before token ownership.
+ // Build spans from the existing atomic workflow catalog itself (title/situations/aliases/routes),
+ // so generic inner words cannot manufacture extra intents and crowd the user's max-5 list.
+ const atomicSpanByStart=new Map();
+ for(const atomicId of ATOMIC_MULTI_GUARD_IDS){
+   const svc=services.find(s=>s.id===atomicId);if(!svc)continue;
+   const literals=[svc.title,...(svc.situations||[]),...(svc.aliases||[]),...(svc.route_keywords||[])].map(v=>({raw:String(v||''),n:normalizeQuery(v)})).filter(x=>x.n.length>=6).sort((a,b)=>b.n.length-a.n.length);
+   for(let start=0;start<parts.length;start++){
+     let acc='';
+     for(let end=start;end<parts.length;end++){
+       const pn=normalizeQuery(parts[end]);if(!pn)continue;acc+=pn;
+       for(const lit of literals){
+         if(acc!==lit.n)continue;
+         if(end<=start)continue; // single-token atomic names are already safe in the normal parser
+         const prev=atomicSpanByStart.get(start);
+         if(!prev||lit.n.length>prev.literal_n.length)atomicSpanByStart.set(start,{end,service:svc,literal_n:lit.n});
+       }
+       if(!literals.some(l=>l.n.startsWith(acc)))break;
+     }
+   }
+ }
  const baseItems=(visibleRouteItems(baseRoute)||baseRoute?.items||[]).filter(x=>x?.service);
  const rawCollapsed=raw.normalize('NFKC').toLowerCase().replace(/\s+/g,' ').trim();
  const hasExplicitSpacedDotSeparator=/\s·\s/.test(raw);
@@ -1028,6 +1064,11 @@ function explicitKeywordEnumerationRoute(query,baseRoute=null){
  };
  const assigned=[];
  for(let pi=0;pi<parts.length;pi++){
+   const atomicSpan=atomicSpanByStart.get(pi);
+   if(atomicSpan){
+     assigned.push({item:{service:atomicSpan.service,score:10025},source_keyword:parts.slice(pi,atomicSpan.end+1).join(' ')});
+     pi=atomicSpan.end;continue;
+   }
    const part=parts[pi],n=normalizeQuery(part);if(n.length<2||EXPLICIT_KEYWORD_LIST_STOP.has(n))continue;
    // A visibly spaced middle dot is an explicit list delimiter (A · B), not punctuation
    // inside one registered phrase (A·B). Never let a compound literal cross that boundary.
@@ -2084,7 +2125,7 @@ function searchCampusServicesRaw(query,metaGuard=false){
  const p0=globalThis.EodigaSearchCore?.resolve?.(q,services);
  // An exact canonical service identity (including documented wrappers/facets) outranks
  // punctuation-based multi splitting. Official titles can legitimately contain '/', '&', '·'.
- const exactIdentityReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','natural_title_question','exact_situation','exact_route_alias']);
+ const exactIdentityReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','title_with_method_facet','natural_title_question','natural_title_inquiry','exact_situation','exact_route_alias']);
  // Do not return an exact-looking whole-query identity yet when the user used a comma/semicolon.
  // First verify whether each separated chunk is itself an exact catalog service. This preserves
  // explicit multi-service enumerations even when a broader route title happens to resemble the whole string.
@@ -2374,6 +2415,18 @@ function searchCampusServices(query,metaGuard=false){
   // keeping multi-keyword input on the existing one-keyword-one-intent path.
   const broadKeywordCollection=broadSingleKeywordCollectionRoute(query);
   if(broadKeywordCollection)return dedupeRouteIntentItems(broadKeywordCollection);
+  // Preserve a complete deterministic service identity before the lower-level keyword slot parser.
+  // This covers canonical titles/situations plus harmless display/method facets, while explicit
+  // multi-intent input is already returned by SearchCore as multi_intent rather than an identity.
+  const coreIdentity=globalThis.EodigaSearchCore?.resolve?.(query,services);
+  const unconditionalCoreIdentityReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','title_with_method_facet','natural_title_question','exact_situation','exact_route_alias']);
+  if(coreIdentity&&unconditionalCoreIdentityReasons.has(coreIdentity.reason))return dedupeRouteIntentItems(coreIdentity);
+  if(coreIdentity?.reason==='natural_title_inquiry'){
+    const nq=normalizeQuery(query);
+    const simpleFacetRemainders=new Set(['문의','담당부서','담당','위치','어디','필요서류','제출서류','서류','방법','신청방법','연락처','전화번호','전화']);
+    const isSimpleTitleFacet=services.some(s=>{const t=normalizeQuery(s.title||'');return t&&nq.startsWith(t)&&nq.length>t.length&&simpleFacetRemainders.has(nq.slice(t.length));});
+    if(isSimpleTitleFacet)return dedupeRouteIntentItems(coreIdentity);
+  }
   // A unique curated natural-language situation may resolve the whole sentence only when
   // it is not itself a registered strong keyword and has no explicit multi-intent separator.
   // This restores the intended natural-language context layer without weakening keyword-first.
@@ -2440,7 +2493,7 @@ function searchCampusServices(query,metaGuard=false){
 
 function classifyRouteConfidence(route,query=''){
   if(!route||route.status!=='answer'||!(route.items||[]).length)return 'low';
-  const highReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','natural_title_inquiry','protected_alias','department_general','exact_situation','p0_resolver','exact_route_alias','canonical_route_alias','specific','exact','context_priority','composite_early','directory_context','multi_intent','local_natural','keyword_exact']);
+  const highReasons=new Set(['exact_title','wrapped_exact_title','title_with_facet','title_with_method_facet','natural_title_inquiry','protected_alias','department_general','exact_situation','p0_resolver','exact_route_alias','canonical_route_alias','specific','exact','context_priority','composite_early','directory_context','multi_intent','local_natural','keyword_exact']);
   const mediumReasons=new Set(['semantic','broad','direct','typo','typo_strong','typo_phrase','official_entity','organization_typo','academic_directory','academic_directory_intent','academic_directory_explicit','academic_directory_named','credit_broad','academic_directory_broad']);
   if(highReasons.has(route.reason))return 'high';
   if(mediumReasons.has(route.reason))return 'medium';
@@ -3313,7 +3366,7 @@ function renderSearchResult(q,route,ms=0){
  window.scrollTo({top:$('#searchState').offsetTop-35,behavior:'smooth'});
 }
 globalThis.EodigaDebug={
- version:'7.3.36-WIP',
+ version:'7.3.37-WIP',
  search(query){
    const q=String(query||'').slice(0,300);
    const route=searchCampusServices(q);
@@ -3326,7 +3379,7 @@ globalThis.EodigaDebug={
    const route=searchCampusServices(q);
    const unresolved=route?.status==='answer'&&route?.items?.length?findUnresolvedClauses(q):[];
    const fullGate=fullAssistGate(q,route);
-   return {version:'7.3.36-WIP',route_status:route?.status||null,route_reason:route?.reason||null,multi_source:route?.multi_source||null,matched_service_ids:(route?.items||[]).slice(0,5).map(x=>x.service?.id).filter(Boolean),unresolved_clauses:unresolved,full_gate:fullGate,vector_live_enabled:vectorRuntimeEnabled(),will_try_vector_full:vectorRuntimeEnabled()&&location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_try_vector_missing_only:vectorRuntimeEnabled()&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route)),will_call_full:location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_call_missing_only:location.protocol!=='file:'&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route))};
+   return {version:'7.3.37-WIP',route_status:route?.status||null,route_reason:route?.reason||null,multi_source:route?.multi_source||null,matched_service_ids:(route?.items||[]).slice(0,5).map(x=>x.service?.id).filter(Boolean),unresolved_clauses:unresolved,full_gate:fullGate,vector_live_enabled:vectorRuntimeEnabled(),will_try_vector_full:vectorRuntimeEnabled()&&location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_try_vector_missing_only:vectorRuntimeEnabled()&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route)),will_call_full:location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_call_missing_only:location.protocol!=='file:'&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route))};
  }
 };
 

@@ -1,0 +1,52 @@
+{
+  "version": "7.3.37-WIP",
+  "service_count": 413,
+  "category_count": 50,
+  "department_count": 96,
+  "official_titles": {
+    "total": 413,
+    "department_owner_pass": 413,
+    "wrong_department": 0
+  },
+  "situations": {
+    "total": 1942,
+    "direct_department_match": 1937,
+    "reviewed_nonmatches": 5,
+    "notes": "4 ambiguous 컴퓨터 학과/전공 -> general academic directory; 1 창업동아리 문의 -> more specific 창업교육센터 workflow"
+  },
+  "facets": {
+    "total": 2478,
+    "raw_department_string_pass": 2475,
+    "normalized_same_organization_pass": 2478,
+    "wrong_organization": 0
+  },
+  "strong_literals": {
+    "total": 1178,
+    "raw_service_id_pass": 1103,
+    "department_owner_pass": 1178
+  },
+  "multi_2_to_5": {
+    "total": 20000,
+    "raw_id_exact": 19990,
+    "canonical_twin_differences": 10,
+    "department_owner_pass": 20000,
+    "wrong_department": 0
+  },
+  "targeted_boundaries": [
+    "생활관 상담 facets",
+    "풋살구장 사용 신청 방법",
+    "실내체육관(농구장) 사용 신청 방법",
+    "창업 비교과",
+    "창업동아리 문의",
+    "학생군사교육단 신청방법",
+    "휴학+국가장학금 multi sentence",
+    "atomic 일반휴학→병역휴학 변경 slot protection"
+  ],
+  "vector_policy_unchanged": true,
+  "vector_min_score": 0.92,
+  "vector_min_margin": 0.01,
+  "vector_no_auto_accept": [
+    "return"
+  ],
+  "vector_timeout_ms": 3500
+}

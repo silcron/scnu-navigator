@@ -383,6 +383,13 @@ function resolve(query,services){
  const naturalFacetTitles=services.filter(s=>{const t=N(s.title);if(!t||!n.startsWith(t)||n===t)return false;const rem=n.slice(t.length);return facetTail.test(rem);}).sort((a,b)=>a.id.localeCompare(b.id));
  const facetTitles=[...services.filter(s=>facetCores.has(N(s.title))),...naturalFacetTitles].filter((s,i,a)=>a.findIndex(x=>x.id===s.id)===i).sort((a,b)=>a.id.localeCompare(b.id));
  if(facetTitles.length)return answer(services,facetTitles.map(x=>x.id),'title_with_facet');
+ // If the user supplied a complete canonical workflow title that already contains an action
+ // (신청/예약/발급/등록/납부/조회/변경) and only asks "방법/어떻게", keep that exact owner.
+ // This is narrower than treating 방법 as a global facet, so action-sensitive queries such as
+ // "메이커스페이스 신청방법" can still use their established specific workflow semantics.
+ const methodFacetTail=/^(?:방법|신청방법|어떻게|어떻게해|어떻게하나요|어떻게해요|하는법|하는방법|절차)$/;
+ const titleMethodFacet=services.filter(s=>{const t=N(s.title);if(!t||!n.startsWith(t)||n===t)return false;const rem=n.slice(t.length);return methodFacetTail.test(rem);}).sort((a,b)=>a.id.localeCompare(b.id));
+ if(titleMethodFacet.length)return answer(services,titleMethodFacet.map(x=>x.id),'title_with_method_facet');
  // Natural Korean question endings around an exact service title should not force fuzzy search.
  // Examples: “수강신청이 궁금해”, “국가장학금도 궁금해요”. Strip only an outer particle
  // plus a small allow-list of question endings, then require an exact canonical title match.
