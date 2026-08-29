@@ -2,7 +2,7 @@
 'use strict';
 
 const CONFIG={
-  version:'7.3.35-vector-live-candidate',
+  version:'7.3.36-vector-coldstart-guard',
   live_enabled:true,
   transformers_url:'https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0',
   model:'Xenova/multilingual-e5-small',

@@ -2492,12 +2492,17 @@ function mergeClassifierResult(localRoute,result,{partial=false,coverageAudit=fa
 function vectorRuntimeEnabled(){
   return Boolean(globalThis.EodigaVector?.liveEnabled&&typeof globalThis.EodigaVector?.resolveClauses==='function');
 }
+const VECTOR_RESOLVE_TIMEOUT_MS=3500;
 async function resolveVectorClausesSafely(clauses,lockedIds=[],maxAdd=5){
   const clean=(clauses||[]).map(x=>String(x||'').trim()).filter(Boolean).slice(0,5);
   if(!clean.length||maxAdd<=0)return {available:false,reason:'no_vector_slots',matches:[],unresolved_clauses:clean};
   if(!vectorRuntimeEnabled())return {available:false,reason:'vector_live_disabled',matches:[],unresolved_clauses:clean};
   try{
-    const out=await globalThis.EodigaVector.resolveClauses(clean,{locked_ids:(lockedIds||[]).slice(0,5),max_add:Math.max(0,Math.min(5,maxAdd))});
+    const task=globalThis.EodigaVector.resolveClauses(clean,{locked_ids:(lockedIds||[]).slice(0,5),max_add:Math.max(0,Math.min(5,maxAdd))});
+    let timer=null;
+    const timeout=new Promise(resolve=>{timer=setTimeout(()=>resolve({available:false,reason:'vector_timeout',matches:[],unresolved_clauses:clean}),VECTOR_RESOLVE_TIMEOUT_MS);});
+    const out=await Promise.race([task,timeout]);
+    if(timer)clearTimeout(timer);
     return out&&typeof out==='object'?out:{available:false,reason:'vector_invalid_result',matches:[],unresolved_clauses:clean};
   }catch(e){
     console.warn('[EodigaVector] fallback to Gemini:',e);
@@ -3308,7 +3313,7 @@ function renderSearchResult(q,route,ms=0){
  window.scrollTo({top:$('#searchState').offsetTop-35,behavior:'smooth'});
 }
 globalThis.EodigaDebug={
- version:'7.3.35-WIP',
+ version:'7.3.36-WIP',
  search(query){
    const q=String(query||'').slice(0,300);
    const route=searchCampusServices(q);
@@ -3321,7 +3326,7 @@ globalThis.EodigaDebug={
    const route=searchCampusServices(q);
    const unresolved=route?.status==='answer'&&route?.items?.length?findUnresolvedClauses(q):[];
    const fullGate=fullAssistGate(q,route);
-   return {version:'7.3.35-WIP',route_status:route?.status||null,route_reason:route?.reason||null,multi_source:route?.multi_source||null,matched_service_ids:(route?.items||[]).slice(0,5).map(x=>x.service?.id).filter(Boolean),unresolved_clauses:unresolved,full_gate:fullGate,vector_live_enabled:vectorRuntimeEnabled(),will_try_vector_full:vectorRuntimeEnabled()&&location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_try_vector_missing_only:vectorRuntimeEnabled()&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route)),will_call_full:location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_call_missing_only:location.protocol!=='file:'&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route))};
+   return {version:'7.3.36-WIP',route_status:route?.status||null,route_reason:route?.reason||null,multi_source:route?.multi_source||null,matched_service_ids:(route?.items||[]).slice(0,5).map(x=>x.service?.id).filter(Boolean),unresolved_clauses:unresolved,full_gate:fullGate,vector_live_enabled:vectorRuntimeEnabled(),will_try_vector_full:vectorRuntimeEnabled()&&location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_try_vector_missing_only:vectorRuntimeEnabled()&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route)),will_call_full:location.protocol!=='file:'&&route?.status!=='answer'&&!new Set(['out_of_scope_other_university','role_mismatch']).has(route?.reason)&&fullGate.allow,will_call_missing_only:location.protocol!=='file:'&&Boolean(route?.status==='answer'&&route?.items?.length&&shouldAssistMissingOnly(q,route))};
  }
 };
 
